@@ -1,6 +1,7 @@
 package dev.juno.main.ui;
 
 import dev.juno.main.model.JunoSettings;
+import dev.juno.main.model.Organisation;
 import dev.juno.main.model.Project;
 import dev.juno.main.model.Ticket;
 import dev.juno.main.model.TicketStatus;
@@ -34,21 +35,23 @@ import java.util.Objects;
 /** Main window content: toolbar plus one column per {@link TicketStatus}. */
 public final class BoardView {
 
-    /** Project filter entry; {@code projectId == null} means all projects. */
-    private record FilterItem(String projectId, String label) {
+    /** Organisation or project filter entry; {@code id == null} means "all". */
+    private record FilterItem(String id, String label) {
         @Override
         public String toString() {
             return label;
         }
     }
 
-    private static final FilterItem ALL = new FilterItem(null, "All projects");
+    private static final FilterItem ALL_ORGS = new FilterItem(null, "All organisations");
+    private static final FilterItem ALL_PROJECTS = new FilterItem(null, "All projects");
 
     private final BoardService service;
     private final HostServices hostServices;
     private final BorderPane root = new BorderPane();
     private final Map<TicketStatus, VBox> columnBodies = new EnumMap<>(TicketStatus.class);
     private final Map<TicketStatus, Label> columnCounts = new EnumMap<>(TicketStatus.class);
+    private final ComboBox<FilterItem> orgFilter = new ComboBox<>();
     private final ComboBox<FilterItem> projectFilter = new ComboBox<>();
     private final Label agentsLabel = new Label();
     private final Label statusLabel = new Label("Ready");
@@ -83,6 +86,11 @@ public final class BoardView {
             importIssue.getItems().add(item);
         }
 
+        orgFilter.setOnAction(e -> {
+            if (!updatingFilter) {
+                refresh();
+            }
+        });
         projectFilter.setOnAction(e -> {
             if (!updatingFilter) {
                 refresh();
@@ -99,7 +107,8 @@ public final class BoardView {
         title.getStyleClass().add("app-title");
 
         return new ToolBar(title, new Separator(), newTicket, importIssue, new Separator(),
-                new Label("Project:"), projectFilter, spacer, agentsLabel, settings);
+                new Label("Organisation:"), orgFilter, new Label("Project:"), projectFilter,
+                spacer, agentsLabel, settings);
     }
 
     private Node buildColumns() {
@@ -152,15 +161,16 @@ public final class BoardView {
     // ---- refresh ----------------------------------------------------------------------------
 
     private void refresh() {
-        updateProjectFilter();
-        String filterId = projectFilter.getValue() == null ? null : projectFilter.getValue().projectId();
+        updateFilters();
+        String orgId = selectedOrgId();
+        String projectId = selectedProjectId();
         TicketCard.Actions actions = cardActions();
         for (TicketStatus status : TicketStatus.values()) {
             VBox body = columnBodies.get(status);
             body.getChildren().clear();
             int count = 0;
             for (Ticket t : service.column(status)) {
-                if (filterId != null && !filterId.equals(t.getProjectId())) {
+                if (!visible(t, orgId, projectId)) {
                     continue;
                 }
                 body.getChildren().add(TicketCard.create(t, service, actions, hostServices));
@@ -178,29 +188,87 @@ public final class BoardView {
         agentsLabel.getStyleClass().setAll("label", running == 0 ? "agents-idle" : "agents-busy");
     }
 
-    private void updateProjectFilter() {
-        List<FilterItem> items = new ArrayList<>();
-        items.add(ALL);
-        for (Project p : service.settings().getProjects()) {
-            items.add(new FilterItem(p.getId(), p.getName()));
+    private boolean visible(Ticket t, String orgId, String projectId) {
+        if (projectId != null) {
+            return projectId.equals(t.getProjectId());
         }
-        if (items.equals(projectFilter.getItems())) {
-            if (projectFilter.getValue() == null) {
-                projectFilter.setValue(ALL);
-            }
-            return;
+        if (orgId != null) {
+            return service.organisationOf(t).map(o -> o.getId().equals(orgId)).orElse(false);
         }
-        FilterItem selected = projectFilter.getValue();
+        return true;
+    }
+
+    private String selectedOrgId() {
+        return orgFilter.getValue() == null ? null : orgFilter.getValue().id();
+    }
+
+    private String selectedProjectId() {
+        return projectFilter.getValue() == null ? null : projectFilter.getValue().id();
+    }
+
+    /**
+     * Rebuilds both filter lists, keeping selections where still valid. With "All organisations" the project
+     * list holds every project from every organisation (labelled with its organisation).
+     */
+    private void updateFilters() {
+        JunoSettings s = service.settings();
+        String selectedOrg = selectedOrgId();
+        String selectedProject = selectedProjectId();
         updatingFilter = true;
         try {
-            projectFilter.getItems().setAll(items);
-            FilterItem keep = items.stream()
-                    .filter(i -> selected != null && Objects.equals(i.projectId(), selected.projectId()))
-                    .findFirst().orElse(ALL);
-            projectFilter.setValue(keep);
+            List<FilterItem> orgs = new ArrayList<>();
+            orgs.add(ALL_ORGS);
+            for (Organisation o : s.getOrganisations()) {
+                orgs.add(new FilterItem(o.getId(), o.getName()));
+            }
+            if (!orgs.equals(orgFilter.getItems())) {
+                orgFilter.getItems().setAll(orgs);
+            }
+            FilterItem org = find(orgs, selectedOrg, ALL_ORGS);
+            if (!Objects.equals(org, orgFilter.getValue())) {
+                orgFilter.setValue(org);
+            }
+
+            List<FilterItem> projects = new ArrayList<>();
+            projects.add(ALL_PROJECTS);
+            if (org.id() == null) {
+                for (Project p : s.getProjects()) {
+                    String orgName = s.organisationOf(p).map(Organisation::getName).orElse("?");
+                    projects.add(new FilterItem(p.getId(), p.getName() + "  (" + orgName + ")"));
+                }
+            } else {
+                for (Project p : s.projectsIn(org.id())) {
+                    projects.add(new FilterItem(p.getId(), p.getName()));
+                }
+            }
+            if (!projects.equals(projectFilter.getItems())) {
+                projectFilter.getItems().setAll(projects);
+            }
+            FilterItem project = find(projects, selectedProject, ALL_PROJECTS);
+            if (!Objects.equals(project, projectFilter.getValue())) {
+                projectFilter.setValue(project);
+            }
         } finally {
             updatingFilter = false;
         }
+    }
+
+    private static FilterItem find(List<FilterItem> items, String id, FilterItem fallback) {
+        return items.stream().filter(i -> id != null && id.equals(i.id())).findFirst().orElse(fallback);
+    }
+
+    /** Project to pre-select for new/imported tickets: the filtered project, else the org's only project. */
+    private String defaultProjectId() {
+        if (selectedProjectId() != null) {
+            return selectedProjectId();
+        }
+        if (selectedOrgId() != null) {
+            List<Project> inOrg = service.settings().projectsIn(selectedOrgId());
+            if (inOrg.size() == 1) {
+                return inOrg.getFirst().getId();
+            }
+        }
+        return null;
     }
 
     // ---- actions ----------------------------------------------------------------------------
@@ -214,21 +282,16 @@ public final class BoardView {
     }
 
     private void newTicket() {
-        String projectId = projectFilter.getValue() == null ? null : projectFilter.getValue().projectId();
-        Ticket ticket = service.createTicket("", "", projectId);
+        Ticket ticket = service.createTicket("", "", defaultProjectId());
         new TicketDetailsDialog(window(), service, ticket, true, hostServices).showAndWait();
         status(service.ticket(ticket.getId()).map(t -> "Saved " + t.getId()).orElse("Discarded new ticket"));
     }
 
     private void importAsNewTicket(TrackerKind kind) {
-        String location = "";
-        if (projectFilter.getValue() != null && projectFilter.getValue().projectId() != null) {
-            location = service.settings().project(projectFilter.getValue().projectId())
-                    .map(p -> p.location(kind)).orElse("");
-        }
-        new IssuePickerDialog(window(), service, kind, location, null).showAndWait().ifPresent(sel -> {
+        new IssuePickerDialog(window(), service, kind, selectedOrgId(), defaultProjectId(), null, null)
+                .showAndWait().ifPresent(sel -> {
             status("Importing " + kind.displayName() + " " + sel.location() + "#" + sel.number() + "…");
-            Fx.async(() -> service.importAsNewTicket(kind, sel.location(), sel.number()),
+            Fx.async(() -> service.importAsNewTicket(sel.projectId(), kind, sel.location(), sel.number()),
                     t -> status("Imported " + kind.displayName() + " issue as " + t.getId()),
                     err -> {
                         status("Import failed");

@@ -3,8 +3,10 @@ package dev.juno.main.store;
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.PropertyAccessor;
 import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import dev.juno.main.model.JunoSettings;
 import dev.juno.main.model.Ticket;
 
@@ -84,7 +86,23 @@ public final class JunoStore {
     }
 
     public JunoSettings loadSettings() {
-        return read(home.resolve("settings.json"), JunoSettings.class, JunoSettings::new);
+        Path file = home.resolve("settings.json");
+        if (!Files.exists(file)) {
+            return JunoSettings.createDefault();
+        }
+        JunoSettings settings;
+        try {
+            JsonNode tree = mapper.readTree(file.toFile());
+            if (tree instanceof ObjectNode root && SettingsMigration.isLegacy(root)) {
+                Files.copy(file, file.resolveSibling("settings.pre-orgs.json"), StandardCopyOption.REPLACE_EXISTING);
+                SettingsMigration.migrate(root);
+            }
+            settings = mapper.treeToValue(tree, JunoSettings.class);
+        } catch (IOException e) {
+            settings = read(file, JunoSettings.class, JunoSettings::createDefault);
+        }
+        settings.normalise();
+        return settings;
     }
 
     public void saveSettings(JunoSettings settings) {

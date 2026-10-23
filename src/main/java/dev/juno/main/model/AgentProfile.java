@@ -1,12 +1,15 @@
 package dev.juno.main.model;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
- * Which Claude instance and model agents run with. Agents are Claude Code processes started in headless
- * ({@code -p}) mode inside the ticket's project directory.
+ * A named agent configuration: which Claude instance and model to run, and how. Profiles are assigned to
+ * organisations, projects and tickets; the most specific assignment wins (ticket, then project, then org).
+ *
+ * <p>Agents are Claude Code processes started in headless ({@code -p}) mode in the project directory.
  */
-public final class AgentSettings {
+public final class AgentProfile {
 
     /** Suggested model identifiers; the field is free text so any model or alias can be used. */
     public static final List<String> SUGGESTED_MODELS = List.of(
@@ -16,6 +19,8 @@ public final class AgentSettings {
     public static final List<String> PERMISSION_MODES =
             List.of("acceptEdits", "default", "plan", "bypassPermissions");
 
+    private String id = UUID.randomUUID().toString();
+    private String name = "New agent";
     /** Claude Code executable: a name on PATH or an absolute path. */
     private String cliPath = "claude";
     private String model = "claude-sonnet-5-5";
@@ -24,16 +29,33 @@ public final class AgentSettings {
     private String allowedTools = "";
     /** 0 means no limit. */
     private int maxTurns = 0;
-    /** Optional API key; when blank the CLI's own login / environment is used. */
+    /** Optional API key (or {@code env:VAR}); when blank the CLI's own login / environment is used. */
     private String apiKey = "";
     /** Optional {@code ANTHROPIC_BASE_URL}, e.g. for a gateway or proxy instance. */
     private String baseUrl = "";
     /** Additional raw CLI arguments, whitespace separated. */
     private String extraArgs = "";
-    /** Give agents the GitLab/GitHub MCP servers so they can read and comment on linked issues. */
+    /** Give agents their organisation's GitLab/GitHub MCP servers so they can read and comment on issues. */
     private boolean exposeTrackerMcp = false;
-    /** Maximum number of agents running at once (further starts are refused). */
-    private int maxConcurrentAgents = 3;
+
+    public AgentProfile() {
+    }
+
+    public AgentProfile(String name) {
+        this.name = name;
+    }
+
+    public String getId() {
+        return id;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
 
     public String getCliPath() {
         return cliPath;
@@ -107,11 +129,23 @@ public final class AgentSettings {
         this.exposeTrackerMcp = exposeTrackerMcp;
     }
 
-    public int getMaxConcurrentAgents() {
-        return maxConcurrentAgents;
+    /** A copy with a new id and the given name. */
+    public AgentProfile duplicate(String newName) {
+        AgentProfile copy = new AgentProfile(newName);
+        copy.cliPath = cliPath;
+        copy.model = model;
+        copy.permissionMode = permissionMode;
+        copy.allowedTools = allowedTools;
+        copy.maxTurns = maxTurns;
+        copy.apiKey = apiKey;
+        copy.baseUrl = baseUrl;
+        copy.extraArgs = extraArgs;
+        copy.exposeTrackerMcp = exposeTrackerMcp;
+        return copy;
     }
 
-    public void setMaxConcurrentAgents(int maxConcurrentAgents) {
-        this.maxConcurrentAgents = maxConcurrentAgents;
+    @Override
+    public String toString() {
+        return name;
     }
 }

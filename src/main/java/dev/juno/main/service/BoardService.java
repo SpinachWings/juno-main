@@ -9,9 +9,11 @@ import dev.juno.main.agent.PromptBuilder;
 import dev.juno.main.integration.IssueData;
 import dev.juno.main.integration.IssueTrackerService;
 import dev.juno.main.mcp.McpException;
-import dev.juno.main.model.AgentSettings;
+import dev.juno.main.model.AgentAssignment;
+import dev.juno.main.model.AgentProfile;
 import dev.juno.main.model.ExternalRef;
 import dev.juno.main.model.JunoSettings;
+import dev.juno.main.model.Organisation;
 import dev.juno.main.model.Project;
 import dev.juno.main.model.Ticket;
 import dev.juno.main.model.TicketStatus;
@@ -101,6 +103,16 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         return settings.project(ticket.getProjectId());
     }
 
+    /** A ticket's organisation, derived from its project. */
+    public synchronized Optional<Organisation> organisationOf(Ticket ticket) {
+        return projectOf(ticket).flatMap(settings::organisationOf);
+    }
+
+    /** The agent that would work on a ticket (ticket, then project, then organisation assignment). */
+    public synchronized Optional<AgentAssignment> agentFor(Ticket ticket) {
+        return settings.resolveAgent(ticket);
+    }
+
     public boolean isAgentRunning(String ticketId) {
         return runner.isRunning(ticketId);
     }
@@ -156,6 +168,41 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         fireChanged();
     }
 
+    /**
+     * Links a ticket to a project. Issue links belong to the old organisation's credentials, so they are
+     * dropped when the ticket moves to a project in a different organisation.
+     *
+     * @return true if issue links were removed
+     */
+    public boolean assignProject(Ticket ticket, String projectId) {
+        boolean dropped = false;
+        synchronized (this) {
+            String oldOrg = organisationOf(ticket).map(Organisation::getId).orElse(null);
+            String newOrg = settings.project(projectId).map(Project::getOrgId).orElse(null);
+            if (oldOrg != null && !oldOrg.equals(newOrg)) {
+                for (TrackerKind kind : TrackerKind.values()) {
+                    if (ticket.getRef(kind) != null) {
+                        ticket.setRef(kind, null);
+                        dropped = true;
+                    }
+                }
+            }
+            ticket.setProjectId(projectId);
+            ticket.touch();
+            persist();
+        }
+        fireChanged();
+        return dropped;
+    }
+
+    /** Whether {@link #assignProject} would drop issue links. */
+    public synchronized boolean wouldDropLinks(Ticket ticket, String projectId) {
+        String oldOrg = organisationOf(ticket).map(Organisation::getId).orElse(null);
+        String newOrg = settings.project(projectId).map(Project::getOrgId).orElse(null);
+        boolean hasLinks = ticket.getRef(TrackerKind.GITLAB) != null || ticket.getRef(TrackerKind.GITHUB) != null;
+        return hasLinks && oldOrg != null && !oldOrg.equals(newOrg);
+    }
+
     /** Manually moves a ticket between columns (not into or out of Working while an agent runs). */
     public void move(String ticketId, TicketStatus target) throws JunoException {
         if (target == TicketStatus.WORKING) {
@@ -191,12 +238,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         AgentRunner.Request request;
         synchronized (this) {
             Ticket t = require(ticketId);
-            Project project = requireProject(t);
-            checkCapacity();
-            Path mcpConfig = writeAgentMcpConfig();
-            String prompt = PromptBuilder.initial(t, project, mcpConfig != null);
-            request = new AgentRunner.Request(t.getId(), Path.of(project.getPath()), prompt, null,
-                    store.copy(settings.getAgent(), AgentSettings.class), mcpConfig);
+            request = buildRequest(t, null, tools -> PromptBuilder.initial(t, requireProjectUnchecked(t), tools));
         }
         launch(request);
     }
@@ -209,18 +251,44 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         AgentRunner.Request request;
         synchronized (this) {
             Ticket t = require(ticketId);
-            Project project = requireProject(t);
-            checkCapacity();
-            Path mcpConfig = writeAgentMcpConfig();
             String session = t.getAgentSessionId();
-            String prompt = session != null
+            request = buildRequest(t, session, tools -> session != null
                     ? PromptBuilder.resume(t, answer)
-                    : PromptBuilder.initial(t, project, mcpConfig != null)
-                            + "\n## Additional guidance from a human\n" + answer.strip() + "\n";
-            request = new AgentRunner.Request(t.getId(), Path.of(project.getPath()), prompt, session,
-                    store.copy(settings.getAgent(), AgentSettings.class), mcpConfig);
+                    : PromptBuilder.initial(t, requireProjectUnchecked(t), tools)
+                            + "\n## Additional guidance from a human\n" + answer.strip() + "\n");
         }
         launch(request);
+    }
+
+    /** Resolves project, organisation and agent for a run. Caller holds the lock. */
+    private AgentRunner.Request buildRequest(Ticket t, String resumeSession,
+                                             java.util.function.Function<Boolean, String> prompt)
+            throws JunoException {
+        Project project = requireProject(t);
+        Organisation org = settings.organisationOf(project)
+                .orElseThrow(() -> new JunoException("Project '" + project.getName() + "' has no organisation"));
+        AgentAssignment agent = settings.resolveAgent(t).orElseThrow(() -> new JunoException(
+                "No agent is assigned to " + t.getId() + ", project '" + project.getName()
+                        + "' or organisation '" + org.getName() + "'. Assign one in the ticket's Details "
+                        + "or in Settings."));
+        checkCapacity();
+
+        AgentProfile profile = store.copy(agent.profile(), AgentProfile.class);
+        String extra = project.getExtraAllowedTools();
+        if (extra != null && !extra.isBlank()) {
+            String base = profile.getAllowedTools() == null ? "" : profile.getAllowedTools().strip();
+            profile.setAllowedTools((base + " " + extra.strip()).strip());
+        }
+        Path mcpConfig = profile.isExposeTrackerMcp() ? writeAgentMcpConfig(t, org) : null;
+        String label = "'" + agent.profile().getName() + "' (" + profile.getModel() + ", assigned on "
+                + agent.level().label() + (agent.level() == AgentAssignment.Level.TICKET ? "" : " " + agent.owner())
+                + ")";
+        return new AgentRunner.Request(t.getId(), Path.of(project.getPath()), prompt.apply(mcpConfig != null),
+                resumeSession, profile, mcpConfig, label);
+    }
+
+    private Project requireProjectUnchecked(Ticket t) {
+        return settings.project(t.getProjectId()).orElseThrow();
     }
 
     public void stopWork(String ticketId) {
@@ -317,21 +385,24 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
     }
 
     private void checkCapacity() throws JunoException {
-        int max = Math.max(1, settings.getAgent().getMaxConcurrentAgents());
+        int max = Math.max(1, settings.getMaxConcurrentAgents());
         if (runner.runningCount() >= max) {
-            throw new JunoException(max + " agent(s) already running (limit set in Settings → Agent)");
+            throw new JunoException(max + " agent(s) already running (limit set in Settings → General)");
         }
     }
 
-    /** Writes the MCP config that gives agents the tracker tools, or returns null when disabled. */
-    private Path writeAgentMcpConfig() throws JunoException {
-        if (!settings.getAgent().isExposeTrackerMcp()) {
-            return null;
-        }
+    /**
+     * Writes a per-ticket MCP config containing only the ticket's organisation's tracker servers, so an
+     * agent can never use another organisation's credentials. Returns null if nothing is available.
+     */
+    private Path writeAgentMcpConfig(Ticket ticket, Organisation org) throws JunoException {
         ObjectMapper mapper = store.mapper();
         ObjectNode root = mapper.createObjectNode();
         ObjectNode servers = root.putObject("mcpServers");
         for (TrackerKind kind : TrackerKind.values()) {
+            if (!org.tracker(kind).isEnabled()) {
+                continue;
+            }
             List<String> command;
             try {
                 command = IssueTrackerService.command(settings, kind);
@@ -344,15 +415,17 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
             ArrayNode args = server.putArray("args");
             command.subList(1, command.size()).forEach(args::add);
             ObjectNode env = server.putObject("env");
-            for (Map.Entry<String, String> e : IssueTrackerService.environment(settings, kind).entrySet()) {
+            for (Map.Entry<String, String> e : IssueTrackerService.environment(org, kind).entrySet()) {
                 env.put(e.getKey(), e.getValue());
             }
         }
         if (servers.isEmpty()) {
             return null;
         }
-        Path file = store.home().resolve("agent-mcp.json");
+        Path dir = store.home().resolve("agent-mcp");
+        Path file = dir.resolve(ticket.getId().replaceAll("[^A-Za-z0-9_.-]", "_") + ".json");
         try {
+            Files.createDirectories(dir);
             Files.write(file, mapper.writeValueAsBytes(root));
         } catch (IOException e) {
             throw new JunoException("Could not write agent MCP config: " + e.getMessage(), e);
@@ -371,31 +444,49 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         return projectOf(ticket).map(p -> p.location(kind)).orElse("");
     }
 
-    public List<IssueData> listIssues(TrackerKind kind, String location) throws JunoException {
+    public List<IssueData> listIssues(String orgId, TrackerKind kind, String location) throws JunoException {
+        Organisation org = requireOrganisation(orgId);
         try {
-            return trackers.listIssues(kind, location, "open", 100);
+            return trackers.listIssues(org, kind, location, "open", 100);
         } catch (McpException e) {
             throw new JunoException(e.getMessage(), e);
         }
     }
 
     /**
-     * Replaces the ticket's title and description with the remote issue's, links the issue and, when a
-     * project is configured for that GitLab project / GitHub repo, links the ticket to it.
+     * Replaces the ticket's title and description with the remote issue's and links the issue. The issue is
+     * read with the chosen project's organisation's credentials. The ticket is linked to the project in that
+     * organisation whose GitLab project / GitHub repo matches the location, falling back to the chosen one.
      */
-    public void importIssue(String ticketId, TrackerKind kind, String location, long number) throws JunoException {
+    public void importIssue(String ticketId, String projectId, TrackerKind kind, String location, long number)
+            throws JunoException {
+        Project chosen;
+        Organisation org;
+        synchronized (this) {
+            chosen = settings.project(projectId)
+                    .orElseThrow(() -> new JunoException("Choose the project to import into"));
+            org = settings.organisationOf(chosen)
+                    .orElseThrow(() -> new JunoException("Project '" + chosen.getName() + "' has no organisation"));
+        }
         IssueData issue;
         try {
-            issue = trackers.getIssue(kind, location, number, false);
+            issue = trackers.getIssue(org, kind, location, number, false);
         } catch (McpException e) {
             throw new JunoException("Import from " + kind.displayName() + " failed: " + e.getMessage(), e);
         }
         synchronized (this) {
             Ticket t = require(ticketId);
+            Project target = settings.projectForLocation(org.getId(), kind, location).orElse(chosen);
+            String previousOrg = organisationOf(t).map(Organisation::getId).orElse(null);
+            if (previousOrg != null && !previousOrg.equals(org.getId())) {
+                for (TrackerKind k : TrackerKind.values()) {
+                    t.setRef(k, null); // links from another organisation's credentials
+                }
+            }
+            t.setProjectId(target.getId());
             t.setTitle(issue.title());
             t.setDescription(issue.body());
             t.setRef(kind, new ExternalRef(location.trim(), issue.number(), issue.url(), Instant.now().toString()));
-            settings.projectForLocation(kind, location).ifPresent(p -> t.setProjectId(p.getId()));
             t.touch();
             persist();
         }
@@ -403,10 +494,11 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
     }
 
     /** Creates a new Pending ticket from a remote issue. */
-    public Ticket importAsNewTicket(TrackerKind kind, String location, long number) throws JunoException {
-        Ticket ticket = createTicket("Importing " + kind.shortName() + " #" + number + "…", "", null);
+    public Ticket importAsNewTicket(String projectId, TrackerKind kind, String location, long number)
+            throws JunoException {
+        Ticket ticket = createTicket("Importing " + kind.shortName() + " #" + number + "…", "", projectId);
         try {
-            importIssue(ticket.getId(), kind, location, number);
+            importIssue(ticket.getId(), projectId, kind, location, number);
         } catch (JunoException e) {
             deleteTicket(ticket.getId());
             throw e;
@@ -415,18 +507,22 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
     }
 
     /**
-     * Uploads the ticket's title and description: updates the linked issue if there is one, otherwise
-     * creates an issue in {@code location} and links it.
+     * Uploads the ticket's title and description with its organisation's credentials: updates the linked
+     * issue if there is one, otherwise creates an issue in {@code location} and links it.
      */
     public ExternalRef upload(String ticketId, TrackerKind kind, String location) throws JunoException {
         String title;
         String body;
         ExternalRef existing;
+        Organisation org;
         synchronized (this) {
             Ticket t = require(ticketId);
             title = t.getTitle();
             body = t.getDescription();
             existing = t.getRef(kind);
+            org = organisationOf(t).orElseThrow(() -> new JunoException(
+                    t.getId() + " is not linked to a project. Choose a project first: its organisation's "
+                            + kind.displayName() + " credentials are used for the upload."));
         }
         if (title == null || title.isBlank()) {
             throw new JunoException("The ticket needs a title before it can be uploaded");
@@ -435,8 +531,8 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         String target = existing != null ? existing.location() : location;
         try {
             issue = existing != null
-                    ? trackers.updateIssue(kind, existing.location(), existing.number(), title, body)
-                    : trackers.createIssue(kind, location, title, body);
+                    ? trackers.updateIssue(org, kind, existing.location(), existing.number(), title, body)
+                    : trackers.createIssue(org, kind, location, title, body);
         } catch (McpException e) {
             throw new JunoException("Upload to " + kind.displayName() + " failed: " + e.getMessage(), e);
         }
@@ -444,9 +540,6 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         synchronized (this) {
             Ticket t = require(ticketId);
             t.setRef(kind, ref);
-            if (t.getProjectId() == null) {
-                settings.projectForLocation(kind, target).ifPresent(p -> t.setProjectId(p.getId()));
-            }
             t.touch();
             persist();
         }
@@ -465,10 +558,12 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         fireChanged();
     }
 
-    /** Starts the tracker's MCP server with the given (unsaved) settings and lists its tools. */
-    public List<String> testTracker(JunoSettings candidate, TrackerKind kind) throws JunoException {
+    /** Starts an organisation's MCP server with the given (unsaved) settings and lists its tools. */
+    public List<String> testTracker(JunoSettings candidate, String orgId, TrackerKind kind) throws JunoException {
+        Organisation org = candidate.organisation(orgId)
+                .orElseThrow(() -> new JunoException("Unknown organisation"));
         try (IssueTrackerService probe = new IssueTrackerService(() -> candidate, this::trackerLog)) {
-            return probe.test(kind);
+            return probe.test(org, kind);
         } catch (McpException e) {
             throw new JunoException(e.getMessage(), e);
         }
@@ -489,6 +584,10 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
                 .orElseThrow(() -> new JunoException("Ticket " + ticketId + " no longer exists"));
     }
 
+    private synchronized Organisation requireOrganisation(String orgId) throws JunoException {
+        return settings.organisation(orgId).orElseThrow(() -> new JunoException("Choose an organisation"));
+    }
+
     private Project requireProject(Ticket t) throws JunoException {
         Project project = settings.project(t.getProjectId())
                 .orElseThrow(() -> new JunoException(t.getId() + " is not linked to a project. "
@@ -496,7 +595,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         if (project.getPath() == null || project.getPath().isBlank()
                 || !Files.isDirectory(Path.of(project.getPath()))) {
             throw new JunoException("Project '" + project.getName() + "' has no valid directory. "
-                    + "Set it in Settings → Projects.");
+                    + "Set it in Settings → Organisations & projects.");
         }
         return project;
     }

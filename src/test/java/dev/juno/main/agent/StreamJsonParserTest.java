@@ -1,6 +1,6 @@
 package dev.juno.main.agent;
 
-import dev.juno.main.model.AgentSettings;
+import dev.juno.main.model.AgentProfile;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Path;
@@ -61,7 +61,7 @@ class StreamJsonParserTest {
 
     @Test
     void buildsCommandLine() {
-        var s = new AgentSettings();
+        var s = new AgentProfile();
         s.setModel("claude-opus-5-5");
         s.setMaxTurns(30);
         s.setAllowedTools("Bash(mvn test:*)");

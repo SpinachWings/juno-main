@@ -1,7 +1,8 @@
 package dev.juno.main.ui;
 
-import dev.juno.main.model.AgentSettings;
+import dev.juno.main.model.AgentProfile;
 import dev.juno.main.model.JunoSettings;
+import dev.juno.main.model.Organisation;
 import dev.juno.main.model.Project;
 import dev.juno.main.model.TrackerKind;
 import dev.juno.main.model.TrackerSettings;
@@ -17,7 +18,6 @@ import javafx.scene.control.ColorPicker;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
-import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.ScrollPane;
@@ -26,6 +26,9 @@ import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
 import javafx.scene.control.TextField;
 import javafx.scene.control.TextInputControl;
+import javafx.scene.control.TreeCell;
+import javafx.scene.control.TreeItem;
+import javafx.scene.control.TreeView;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.ColumnConstraints;
 import javafx.scene.layout.GridPane;
@@ -39,46 +42,84 @@ import javafx.stage.FileChooser;
 import javafx.stage.Window;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
-/** Projects (paths, colours, trackers), agent (Claude instance/model) and integration settings. */
+/**
+ * Settings, edited on a working copy that replaces the live settings on Save:
+ * <ul>
+ *   <li><b>Organisations &amp; projects</b>: a tree of organisations (GitLab/GitHub integrations, default
+ *       agent) and their projects (directory, colour, repos, agent override, extra allowed tools)</li>
+ *   <li><b>Agents</b>: named agent profiles (Claude instance, model, permissions)</li>
+ *   <li><b>General</b>: MCP server jars, Java runtime, concurrency limit</li>
+ * </ul>
+ */
 final class SettingsDialog extends Dialog<JunoSettings> {
 
     private static final Color[] PALETTE = {
             Color.web("#4C8BF5"), Color.web("#E8710A"), Color.web("#1E8E3E"), Color.web("#A142F4"),
             Color.web("#D93025"), Color.web("#12B5CB"), Color.web("#F9AB00"), Color.web("#E52592")};
 
+    /** Combo entry for an agent profile; {@code id == null} means none / inherit. */
+    private record Item(String id, String label) {
+        @Override
+        public String toString() {
+            return label;
+        }
+    }
+
     private final BoardService service;
     private final JunoSettings working;
+    private boolean loading;
 
-    // projects
-    private final ListView<Project> projectList = new ListView<>();
+    // ---- organisations & projects ----
+    private final TreeView<Object> tree = new TreeView<>();
+    private final BorderPane detail = new BorderPane();
+
+    private final TextField orgName = new TextField();
+    private final ComboBox<Item> orgAgent = new ComboBox<>();
+    private final Map<TrackerKind, CheckBox> trackerEnabled = new EnumMap<>(TrackerKind.class);
+    private final Map<TrackerKind, TextField> trackerUrl = new EnumMap<>(TrackerKind.class);
+    private final Map<TrackerKind, PasswordField> trackerToken = new EnumMap<>(TrackerKind.class);
+    private final Map<TrackerKind, Label> trackerResult = new EnumMap<>(TrackerKind.class);
+    private final Label orgProjectsLabel = new Label();
+    private Node orgForm;
+
     private final TextField projectName = new TextField();
+    private final ComboBox<Organisation> projectOrg = new ComboBox<>();
     private final TextField projectPath = new TextField();
     private final ColorPicker projectColor = new ColorPicker();
     private final TextField projectGitlab = new TextField();
     private final TextField projectGithub = new TextField();
-    private final GridPane projectForm = new GridPane();
-    private boolean loadingProject;
+    private final ComboBox<Item> projectAgent = new ComboBox<>();
+    private final TextField projectTools = new TextField();
+    private Node projectForm;
 
-    // agent
+    // ---- agents ----
+    private final ListView<AgentProfile> agentList = new ListView<>();
+    private final TextField agentName = new TextField();
     private final TextField cliPath = new TextField();
+    private final PasswordField apiKey = new PasswordField();
+    private final TextField baseUrl = new TextField();
     private final ComboBox<String> model = new ComboBox<>();
     private final ComboBox<String> permissionMode = new ComboBox<>();
     private final TextField allowedTools = new TextField();
     private final Spinner<Integer> maxTurns = new Spinner<>(0, 1000, 0, 5);
-    private final Spinner<Integer> maxAgents = new Spinner<>(1, 32, 3);
-    private final PasswordField apiKey = new PasswordField();
-    private final TextField baseUrl = new TextField();
     private final TextField extraArgs = new TextField();
-    private final CheckBox exposeMcp = new CheckBox("Give agents the GitLab/GitHub MCP tools (read issues, add comments)");
+    private final CheckBox exposeMcp =
+            new CheckBox("Give agents their organisation's GitLab/GitHub MCP tools (read issues, add comments)");
+    private final Label agentUsage = new Label();
+    private final GridPane agentForm = new GridPane();
 
-    // integrations
-    private final Map<TrackerKind, TextField> trackerUrl = new EnumMap<>(TrackerKind.class);
-    private final Map<TrackerKind, PasswordField> trackerToken = new EnumMap<>(TrackerKind.class);
-    private final Map<TrackerKind, TextField> trackerJar = new EnumMap<>(TrackerKind.class);
+    // ---- general ----
+    private final Map<TrackerKind, TextField> mcpJar = new EnumMap<>(TrackerKind.class);
     private final TextField javaExecutable = new TextField();
+    private final Spinner<Integer> maxAgents = new Spinner<>(1, 32, 3);
 
     SettingsDialog(Window owner, BoardService service, JunoSettings working) {
         this.service = service;
@@ -89,13 +130,19 @@ final class SettingsDialog extends Dialog<JunoSettings> {
         setHeaderText(null);
         setResizable(true);
 
-        TabPane tabs = new TabPane(
-                new Tab("Projects", buildProjectsTab()),
-                new Tab("Agent", scroll(buildAgentTab())),
-                new Tab("Integrations", scroll(buildIntegrationsTab())));
+        Tab orgTab = new Tab("Organisations & projects", buildOrganisationsTab());
+        Tab agentTab = new Tab("Agents", buildAgentsTab());
+        Tab generalTab = new Tab("General", scroll(buildGeneralTab()));
+        TabPane tabs = new TabPane(orgTab, agentTab, generalTab);
         tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+        // Agent names may have changed on the Agents tab; refresh the agent pickers.
+        tabs.getSelectionModel().selectedItemProperty().addListener((obs, old, tab) -> {
+            if (tab == orgTab) {
+                showSelection();
+            }
+        });
         getDialogPane().setContent(tabs);
-        getDialogPane().setPrefSize(900, 600);
+        getDialogPane().setPrefSize(980, 660);
 
         ButtonType save = new ButtonType("Save", ButtonBar.ButtonData.OK_DONE);
         getDialogPane().getButtonTypes().addAll(save, ButtonType.CANCEL);
@@ -103,54 +150,145 @@ final class SettingsDialog extends Dialog<JunoSettings> {
             if (button != save) {
                 return null;
             }
-            commitAgentAndIntegrations();
+            commitGeneral();
+            working.normalise();
             return working;
         });
     }
 
-    // ---- projects ---------------------------------------------------------------------------
+    // =========================================================================================
+    // Organisations & projects
+    // =========================================================================================
 
-    private Node buildProjectsTab() {
-        projectList.getItems().setAll(working.getProjects());
-        projectList.setCellFactory(list -> new ListCell<>() {
+    private Node buildOrganisationsTab() {
+        tree.setShowRoot(false);
+        tree.setPrefWidth(260);
+        tree.setCellFactory(t -> new TreeCell<>() {
             @Override
-            protected void updateItem(Project p, boolean empty) {
-                super.updateItem(p, empty);
-                if (empty || p == null) {
+            protected void updateItem(Object item, boolean empty) {
+                super.updateItem(item, empty);
+                getStyleClass().remove("tree-org");
+                if (empty || item == null) {
                     setText(null);
                     setGraphic(null);
-                } else {
+                } else if (item instanceof Organisation o) {
+                    setText(o.getName());
+                    setGraphic(null);
+                    getStyleClass().add("tree-org");
+                } else if (item instanceof Project p) {
                     setText(p.getName());
                     setGraphic(new Circle(6, Fx.parseColor(p.getColor(), Color.GRAY)));
+                } else {
+                    setText(String.valueOf(item));
+                    setGraphic(null);
                 }
             }
         });
-        projectList.setPrefWidth(240);
-        projectList.setPlaceholder(new Label("No projects yet"));
+        tree.getSelectionModel().selectedItemProperty().addListener((obs, old, sel) -> showSelection());
 
-        Button add = new Button("Add");
-        add.setOnAction(e -> {
-            Project p = new Project();
-            p.setColor(Fx.toHex(PALETTE[working.getProjects().size() % PALETTE.length]));
-            working.getProjects().add(p);
-            projectList.getItems().add(p);
-            projectList.getSelectionModel().select(p);
-            projectName.requestFocus();
-            projectName.selectAll();
+        Button addOrg = new Button("Add organisation");
+        addOrg.setOnAction(e -> {
+            Organisation org = new Organisation();
+            if (!working.getAgentProfiles().isEmpty()) {
+                org.setAgentProfileId(working.getAgentProfiles().getFirst().getId());
+            }
+            working.getOrganisations().add(org);
+            rebuildTree(org);
+            orgName.requestFocus();
+            orgName.selectAll();
         });
+        Button addProject = new Button("Add project");
+        addProject.setOnAction(e -> addProject());
         Button remove = new Button("Remove");
-        remove.setOnAction(e -> {
-            Project p = projectList.getSelectionModel().getSelectedItem();
-            if (p != null && Fx.confirm(getDialogPane().getScene().getWindow(), "Remove " + p.getName() + "?",
-                    "Tickets linked to this project will become unlinked. Files on disk are not touched.")) {
-                working.getProjects().remove(p);
-                projectList.getItems().remove(p);
+        remove.setOnAction(e -> removeSelected());
+        remove.disableProperty().bind(tree.getSelectionModel().selectedItemProperty().isNull());
+
+        HBox buttons = new HBox(6, addOrg, addProject, remove);
+        VBox left = new VBox(8, tree, buttons);
+        VBox.setVgrow(tree, Priority.ALWAYS);
+
+        orgForm = scroll(buildOrgForm());
+        projectForm = scroll(buildProjectForm());
+
+        BorderPane pane = new BorderPane();
+        pane.setLeft(left);
+        pane.setCenter(detail);
+        BorderPane.setMargin(detail, new Insets(0, 0, 0, 12));
+        pane.setPadding(new Insets(12));
+
+        Organisation first = working.getOrganisations().isEmpty() ? null : working.getOrganisations().getFirst();
+        rebuildTree(first);
+        return pane;
+    }
+
+    private Node buildOrgForm() {
+        GridPane grid = new GridPane();
+        formGrid(grid);
+        int row = 0;
+        grid.add(sectionTitle("Organisation"), 0, row++, 2, 1);
+        grid.addRow(row++, new Label("Name"), orgName);
+        orgAgent.setMaxWidth(Double.MAX_VALUE);
+        grid.addRow(row++, new Label("Default agent"), orgAgent);
+        grid.add(hint("Used for this organisation's tickets unless their project or the ticket itself assigns "
+                + "a different agent."), 1, row++);
+        orgProjectsLabel.getStyleClass().add("hint");
+        orgProjectsLabel.setWrapText(true);
+        grid.addRow(row++, new Label("Projects"), orgProjectsLabel);
+
+        bind(orgName, Organisation.class, (o, v) -> {
+            o.setName(v);
+            tree.refresh();
+        });
+        orgAgent.setOnAction(e -> {
+            if (!loading && selected() instanceof Organisation o && orgAgent.getValue() != null) {
+                o.setAgentProfileId(orgAgent.getValue().id());
             }
         });
-        remove.disableProperty().bind(projectList.getSelectionModel().selectedItemProperty().isNull());
-        HBox listButtons = new HBox(6, add, remove);
-        VBox left = new VBox(8, projectList, listButtons);
-        VBox.setVgrow(projectList, Priority.ALWAYS);
+
+        for (TrackerKind kind : TrackerKind.values()) {
+            CheckBox enabled = new CheckBox("Enable " + kind.displayName() + " for this organisation");
+            TextField url = new TextField();
+            PasswordField token = new PasswordField();
+            token.setPromptText("Token, env:VARIABLE, or blank to inherit "
+                    + (kind == TrackerKind.GITLAB ? "GITLAB_TOKEN" : "GITHUB_TOKEN"));
+            Label result = new Label();
+            result.setWrapText(true);
+            Button test = new Button("Test connection");
+            trackerEnabled.put(kind, enabled);
+            trackerUrl.put(kind, url);
+            trackerToken.put(kind, token);
+            trackerResult.put(kind, result);
+
+            enabled.selectedProperty().addListener((obs, old, on) -> {
+                if (!loading && selected() instanceof Organisation o) {
+                    o.tracker(kind).setEnabled(on);
+                }
+                url.setDisable(!on);
+                token.setDisable(!on);
+                test.setDisable(!on);
+            });
+            bind(url, Organisation.class, (o, v) -> o.tracker(kind).setApiUrl(v));
+            bind(token, Organisation.class, (o, v) -> o.tracker(kind).setToken(v));
+            test.setOnAction(e -> testTracker(kind));
+
+            HBox testRow = new HBox(8, test, result);
+            testRow.setAlignment(Pos.CENTER_LEFT);
+            grid.add(sectionTitle(kind.displayName() + " integration"), 0, row++, 2, 1);
+            grid.add(enabled, 1, row++);
+            grid.addRow(row++, new Label(kind == TrackerKind.GITLAB ? "Instance URL" : "API URL"), url);
+            grid.addRow(row++, new Label("Access token"), token);
+            grid.add(testRow, 1, row++);
+        }
+        grid.add(hint("Each organisation runs its own GitLab/GitHub MCP server with only its own token, and agents "
+                + "only ever receive their ticket's organisation's servers. Tokens typed here are stored in plain "
+                + "text in ~/.juno/settings.json; 'env:ACME_GITLAB_TOKEN' reads one from an environment variable "
+                + "instead."), 0, row, 2, 1);
+        return grid;
+    }
+
+    private Node buildProjectForm() {
+        GridPane grid = new GridPane();
+        formGrid(grid);
 
         Button browse = new Button("Browse…");
         browse.setOnAction(e -> {
@@ -168,204 +306,439 @@ final class SettingsDialog extends Dialog<JunoSettings> {
         HBox pathRow = new HBox(6, projectPath, browse);
         HBox.setHgrow(projectPath, Priority.ALWAYS);
 
+        projectPath.setPromptText("Local checkout the agents work in");
         projectGitlab.setPromptText("group/project (optional)");
         projectGithub.setPromptText("owner/repo (optional)");
-        projectPath.setPromptText("Local checkout the agents work in");
+        projectTools.setPromptText("e.g. Bash(mvn test:*) Bash(npm run lint)");
+        projectOrg.setMaxWidth(Double.MAX_VALUE);
+        projectAgent.setMaxWidth(Double.MAX_VALUE);
 
-        formGrid(projectForm);
         int row = 0;
-        projectForm.addRow(row++, new Label("Name"), projectName);
-        projectForm.addRow(row++, new Label("Directory"), pathRow);
-        projectForm.addRow(row++, new Label("Colour"), projectColor);
-        projectForm.addRow(row++, new Label("GitLab project"), projectGitlab);
-        projectForm.addRow(row++, new Label("GitHub repo"), projectGithub);
-        projectForm.add(hint("Tickets linked to this project are colour coded with this colour. Imported issues "
-                + "from the GitLab project / GitHub repo above are linked to this project automatically, and "
-                + "uploads default to them."), 0, row, 2, 1);
+        grid.add(sectionTitle("Project"), 0, row++, 2, 1);
+        grid.addRow(row++, new Label("Name"), projectName);
+        grid.addRow(row++, new Label("Organisation"), projectOrg);
+        grid.addRow(row++, new Label("Directory"), pathRow);
+        grid.addRow(row++, new Label("Colour"), projectColor);
+        grid.addRow(row++, new Label("GitLab project"), projectGitlab);
+        grid.addRow(row++, new Label("GitHub repo"), projectGithub);
+        grid.add(hint("Tickets in this project are tinted with its colour. Issues imported from the GitLab "
+                + "project / GitHub repo above are linked to this project automatically, and uploads default to "
+                + "them. Both use the organisation's credentials."), 1, row++);
+        grid.add(sectionTitle("Agent"), 0, row++, 2, 1);
+        grid.addRow(row++, new Label("Agent"), projectAgent);
+        grid.addRow(row++, new Label("Extra allowed tools"), projectTools);
+        grid.add(hint("Overrides the organisation's agent for this project's tickets; a ticket can override it "
+                + "again. Extra allowed tools are added to whichever agent runs here, e.g. this codebase's build "
+                + "and test commands."), 1, row);
 
-        bindProjectField(projectName, Project::setName);
-        bindProjectField(projectPath, Project::setPath);
-        bindProjectField(projectGitlab, Project::setGitlabProject);
-        bindProjectField(projectGithub, Project::setGithubRepo);
+        bind(projectName, Project.class, (p, v) -> {
+            p.setName(v);
+            tree.refresh();
+        });
+        bind(projectPath, Project.class, (p, v) -> p.setPath(v));
+        bind(projectGitlab, Project.class, (p, v) -> p.setGitlabProject(v));
+        bind(projectGithub, Project.class, (p, v) -> p.setGithubRepo(v));
+        bind(projectTools, Project.class, (p, v) -> p.setExtraAllowedTools(v));
         projectColor.valueProperty().addListener((obs, old, value) -> {
-            Project p = projectList.getSelectionModel().getSelectedItem();
-            if (!loadingProject && p != null && value != null) {
+            if (!loading && selected() instanceof Project p && value != null) {
                 p.setColor(Fx.toHex(value));
-                projectList.refresh();
+                tree.refresh();
             }
         });
+        projectAgent.setOnAction(e -> {
+            if (!loading && selected() instanceof Project p && projectAgent.getValue() != null) {
+                p.setAgentProfileId(projectAgent.getValue().id());
+            }
+        });
+        projectOrg.setOnAction(e -> {
+            if (!loading && selected() instanceof Project p && projectOrg.getValue() != null
+                    && !projectOrg.getValue().getId().equals(p.getOrgId())) {
+                p.setOrgId(projectOrg.getValue().getId());
+                rebuildTree(p); // moves it under its new organisation and reloads the form
+            }
+        });
+        return grid;
+    }
 
-        projectList.getSelectionModel().selectedItemProperty().addListener((obs, old, p) -> loadProject(p));
-        if (!projectList.getItems().isEmpty()) {
-            projectList.getSelectionModel().selectFirst();
+    private Object selected() {
+        TreeItem<Object> item = tree.getSelectionModel().getSelectedItem();
+        return item == null ? null : item.getValue();
+    }
+
+    private void rebuildTree(Object select) {
+        TreeItem<Object> root = new TreeItem<>("root");
+        TreeItem<Object> toSelect = null;
+        for (Organisation org : working.getOrganisations()) {
+            TreeItem<Object> orgItem = new TreeItem<>(org);
+            orgItem.setExpanded(true);
+            if (org == select) {
+                toSelect = orgItem;
+            }
+            for (Project p : working.projectsIn(org.getId())) {
+                TreeItem<Object> projectItem = new TreeItem<>(p);
+                orgItem.getChildren().add(projectItem);
+                if (p == select) {
+                    toSelect = projectItem;
+                }
+            }
+            root.getChildren().add(orgItem);
+        }
+        tree.setRoot(root);
+        if (toSelect != null) {
+            tree.getSelectionModel().select(toSelect);
+        } else if (!root.getChildren().isEmpty()) {
+            tree.getSelectionModel().select(root.getChildren().getFirst());
         } else {
-            loadProject(null);
+            tree.getSelectionModel().clearSelection();
+        }
+        showSelection();
+    }
+
+    /** Shows the form for the selected tree node, loading its values. */
+    private void showSelection() {
+        Object item = selected();
+        loading = true;
+        try {
+            if (item instanceof Organisation org) {
+                orgName.setText(org.getName());
+                fillAgentChoices(orgAgent, "— none —", org.getAgentProfileId());
+                for (TrackerKind kind : TrackerKind.values()) {
+                    TrackerSettings t = org.tracker(kind);
+                    trackerEnabled.get(kind).setSelected(t.isEnabled());
+                    trackerUrl.get(kind).setText(t.getApiUrl());
+                    trackerToken.get(kind).setText(t.getToken());
+                    trackerResult.get(kind).setText("");
+                    boolean on = t.isEnabled();
+                    trackerUrl.get(kind).setDisable(!on);
+                    trackerToken.get(kind).setDisable(!on);
+                }
+                List<String> names = working.projectsIn(org.getId()).stream().map(Project::getName).toList();
+                orgProjectsLabel.setText(names.isEmpty() ? "None yet: use Add project." : String.join(", ", names));
+                detail.setCenter(orgForm);
+            } else if (item instanceof Project p) {
+                projectName.setText(p.getName());
+                projectOrg.getItems().setAll(working.getOrganisations());
+                projectOrg.setValue(working.organisation(p.getOrgId()).orElse(null));
+                projectPath.setText(p.getPath());
+                projectColor.setValue(Fx.parseColor(p.getColor(), Color.GRAY));
+                projectGitlab.setText(p.getGitlabProject());
+                projectGithub.setText(p.getGithubRepo());
+                projectTools.setText(p.getExtraAllowedTools());
+                String inherited = working.organisation(p.getOrgId())
+                        .map(o -> "Inherit from organisation: " + working.agentProfile(o.getAgentProfileId())
+                                .map(AgentProfile::getName).orElse("none assigned"))
+                        .orElse("Inherit from organisation");
+                fillAgentChoices(projectAgent, inherited, p.getAgentProfileId());
+                detail.setCenter(projectForm);
+            } else {
+                Label empty = new Label("Add an organisation to get started. Organisations hold GitLab/GitHub "
+                        + "credentials and a default agent; projects belong to an organisation.");
+                empty.setWrapText(true);
+                empty.getStyleClass().add("hint");
+                detail.setCenter(empty);
+            }
+        } finally {
+            loading = false;
+        }
+    }
+
+    private void fillAgentChoices(ComboBox<Item> combo, String noneLabel, String selectedId) {
+        List<Item> items = new ArrayList<>();
+        items.add(new Item(null, noneLabel));
+        for (AgentProfile a : working.getAgentProfiles()) {
+            items.add(new Item(a.getId(), a.getName()));
+        }
+        combo.getItems().setAll(items);
+        combo.setValue(items.stream().filter(i -> Objects.equals(i.id(), selectedId)).findFirst()
+                .orElse(items.getFirst()));
+    }
+
+    private void addProject() {
+        Object item = selected();
+        Organisation org = item instanceof Organisation o ? o
+                : item instanceof Project p ? working.organisation(p.getOrgId()).orElse(null)
+                : null;
+        if (org == null) {
+            if (working.getOrganisations().isEmpty()) {
+                Fx.info(getDialogPane().getScene().getWindow(), "No organisation",
+                        "Add an organisation first; projects belong to an organisation.");
+                return;
+            }
+            org = working.getOrganisations().getFirst();
+        }
+        Project project = new Project();
+        project.setOrgId(org.getId());
+        project.setColor(Fx.toHex(PALETTE[working.getProjects().size() % PALETTE.length]));
+        working.getProjects().add(project);
+        rebuildTree(project);
+        projectName.requestFocus();
+        projectName.selectAll();
+    }
+
+    private void removeSelected() {
+        Object item = selected();
+        Window window = getDialogPane().getScene().getWindow();
+        if (item instanceof Organisation org) {
+            List<Project> projects = working.projectsIn(org.getId());
+            if (Fx.confirm(window, "Remove " + org.getName() + "?",
+                    "This removes the organisation" + (projects.isEmpty() ? "" : " and its " + projects.size()
+                            + " project(s)") + ". Their tickets stay on the board but become unlinked. "
+                            + "Nothing on disk, GitLab or GitHub is touched.")) {
+                working.getProjects().removeAll(projects);
+                working.getOrganisations().remove(org);
+                rebuildTree(null);
+            }
+        } else if (item instanceof Project p) {
+            if (Fx.confirm(window, "Remove " + p.getName() + "?",
+                    "Tickets linked to this project stay on the board but become unlinked. Files on disk are "
+                            + "not touched.")) {
+                Organisation org = working.organisation(p.getOrgId()).orElse(null);
+                working.getProjects().remove(p);
+                rebuildTree(org);
+            }
+        }
+    }
+
+    private void testTracker(TrackerKind kind) {
+        if (!(selected() instanceof Organisation org)) {
+            return;
+        }
+        Label result = trackerResult.get(kind);
+        commitGeneral();
+        JunoSettings candidate = service.store().copy(working, JunoSettings.class);
+        String orgId = org.getId();
+        result.setText("Starting " + kind.displayName() + " MCP server for " + org.getName() + "…");
+        Fx.async(() -> service.testTracker(candidate, orgId, kind),
+                tools -> result.setText("OK - tools: " + String.join(", ", tools)),
+                err -> result.setText("Failed: " + err.getMessage()));
+    }
+
+    // =========================================================================================
+    // Agents
+    // =========================================================================================
+
+    private Node buildAgentsTab() {
+        agentList.getItems().setAll(working.getAgentProfiles());
+        agentList.setPrefWidth(240);
+        agentList.setPlaceholder(new Label("No agents yet"));
+
+        Button add = new Button("Add");
+        add.setOnAction(e -> {
+            AgentProfile a = new AgentProfile("New agent");
+            working.getAgentProfiles().add(a);
+            agentList.getItems().add(a);
+            agentList.getSelectionModel().select(a);
+            agentName.requestFocus();
+            agentName.selectAll();
+        });
+        Button duplicate = new Button("Duplicate");
+        duplicate.setOnAction(e -> {
+            AgentProfile source = agentList.getSelectionModel().getSelectedItem();
+            if (source != null) {
+                AgentProfile copy = source.duplicate(source.getName() + " (copy)");
+                working.getAgentProfiles().add(copy);
+                agentList.getItems().add(copy);
+                agentList.getSelectionModel().select(copy);
+            }
+        });
+        duplicate.disableProperty().bind(agentList.getSelectionModel().selectedItemProperty().isNull());
+        Button remove = new Button("Remove");
+        remove.setOnAction(e -> removeAgent());
+        remove.disableProperty().bind(agentList.getSelectionModel().selectedItemProperty().isNull());
+        VBox left = new VBox(8, agentList, new HBox(6, add, duplicate, remove));
+        VBox.setVgrow(agentList, Priority.ALWAYS);
+
+        model.setEditable(true);
+        model.getItems().setAll(AgentProfile.SUGGESTED_MODELS);
+        model.setMaxWidth(Double.MAX_VALUE);
+        permissionMode.getItems().setAll(AgentProfile.PERMISSION_MODES);
+        apiKey.setPromptText("Blank = the CLI's own login; or a key; or env:VARIABLE");
+        baseUrl.setPromptText("Blank = Anthropic default");
+        allowedTools.setPromptText("e.g. Bash(git status) Bash(git diff:*)");
+        agentUsage.setWrapText(true);
+        agentUsage.getStyleClass().add("hint");
+
+        Button browseCli = fileBrowse(cliPath, "Claude Code executable");
+        HBox cliRow = new HBox(6, cliPath, browseCli);
+        HBox.setHgrow(cliPath, Priority.ALWAYS);
+
+        formGrid(agentForm);
+        int row = 0;
+        agentForm.add(sectionTitle("Agent profile"), 0, row++, 2, 1);
+        agentForm.addRow(row++, new Label("Name"), agentName);
+        agentForm.addRow(row++, new Label("Used by"), agentUsage);
+        agentForm.add(sectionTitle("Claude instance"), 0, row++, 2, 1);
+        agentForm.addRow(row++, new Label("Claude Code CLI"), cliRow);
+        agentForm.addRow(row++, new Label("API key"), apiKey);
+        agentForm.addRow(row++, new Label("Base URL"), baseUrl);
+        agentForm.add(hint("Agents run as 'claude -p' processes in the ticket's project directory. Leave the key "
+                + "blank to use your existing Claude login; set a base URL to route through a gateway."), 1, row++);
+        agentForm.add(sectionTitle("Model and behaviour"), 0, row++, 2, 1);
+        agentForm.addRow(row++, new Label("Model"), model);
+        agentForm.addRow(row++, new Label("Permission mode"), permissionMode);
+        agentForm.addRow(row++, new Label("Allowed tools"), allowedTools);
+        agentForm.addRow(row++, new Label("Max turns (0 = no limit)"), maxTurns);
+        agentForm.addRow(row++, new Label("Extra CLI arguments"), extraArgs);
+        agentForm.add(exposeMcp, 1, row++);
+        agentForm.add(hint("In headless mode, tools that need approval are refused unless the permission mode or "
+                + "allowed tools permit them. 'acceptEdits' lets agents edit files; add Bash rules so they can "
+                + "build and test (projects can add their own). MCP tools must be allowed explicitly, e.g. "
+                + "mcp__juno-github."), 1, row);
+
+        bindAgent(agentName, (a, v) -> {
+            a.setName(v);
+            agentList.refresh();
+        });
+        bindAgent(cliPath, AgentProfile::setCliPath);
+        bindAgent(apiKey, AgentProfile::setApiKey);
+        bindAgent(baseUrl, AgentProfile::setBaseUrl);
+        bindAgent(model.getEditor(), AgentProfile::setModel);
+        bindAgent(allowedTools, AgentProfile::setAllowedTools);
+        bindAgent(extraArgs, AgentProfile::setExtraArgs);
+        model.valueProperty().addListener((obs, old, v) -> {
+            AgentProfile a = agentList.getSelectionModel().getSelectedItem();
+            if (!loading && a != null && v != null) {
+                a.setModel(v.strip());
+            }
+        });
+        permissionMode.valueProperty().addListener((obs, old, v) -> withAgent(a -> a.setPermissionMode(v)));
+        maxTurns.valueProperty().addListener((obs, old, v) -> withAgent(a -> a.setMaxTurns(v)));
+        exposeMcp.selectedProperty().addListener((obs, old, v) -> withAgent(a -> a.setExposeTrackerMcp(v)));
+
+        agentList.getSelectionModel().selectedItemProperty().addListener((obs, old, a) -> loadAgent(a));
+        if (!agentList.getItems().isEmpty()) {
+            agentList.getSelectionModel().selectFirst();
+        } else {
+            loadAgent(null);
         }
 
         BorderPane pane = new BorderPane();
         pane.setLeft(left);
-        pane.setCenter(projectForm);
-        BorderPane.setMargin(projectForm, new Insets(0, 0, 0, 16));
+        pane.setCenter(scroll(agentForm));
+        BorderPane.setMargin(pane.getCenter(), new Insets(0, 0, 0, 12));
         pane.setPadding(new Insets(12));
         return pane;
     }
 
-    private void bindProjectField(TextField field, java.util.function.BiConsumer<Project, String> setter) {
-        field.textProperty().addListener((obs, old, value) -> {
-            Project p = projectList.getSelectionModel().getSelectedItem();
-            if (!loadingProject && p != null) {
-                setter.accept(p, value.strip());
-                projectList.refresh();
-            }
-        });
-    }
-
-    private void loadProject(Project p) {
-        loadingProject = true;
+    private void loadAgent(AgentProfile a) {
+        loading = true;
         try {
-            projectForm.setDisable(p == null);
-            projectName.setText(p == null ? "" : p.getName());
-            projectPath.setText(p == null ? "" : p.getPath());
-            projectColor.setValue(p == null ? Color.GRAY : Fx.parseColor(p.getColor(), Color.GRAY));
-            projectGitlab.setText(p == null ? "" : p.getGitlabProject());
-            projectGithub.setText(p == null ? "" : p.getGithubRepo());
+            agentForm.setDisable(a == null);
+            agentName.setText(a == null ? "" : a.getName());
+            cliPath.setText(a == null ? "" : a.getCliPath());
+            apiKey.setText(a == null ? "" : a.getApiKey());
+            baseUrl.setText(a == null ? "" : a.getBaseUrl());
+            model.getEditor().setText(a == null ? "" : a.getModel());
+            permissionMode.setValue(a == null ? null : a.getPermissionMode());
+            allowedTools.setText(a == null ? "" : a.getAllowedTools());
+            maxTurns.getValueFactory().setValue(a == null ? 0 : a.getMaxTurns());
+            extraArgs.setText(a == null ? "" : a.getExtraArgs());
+            exposeMcp.setSelected(a != null && a.isExposeTrackerMcp());
+            agentUsage.setText(a == null ? "" : usageOf(a));
         } finally {
-            loadingProject = false;
+            loading = false;
         }
     }
 
-    // ---- agent ------------------------------------------------------------------------------
-
-    private Node buildAgentTab() {
-        AgentSettings a = working.getAgent();
-        cliPath.setText(a.getCliPath());
-        model.setEditable(true);
-        model.getItems().setAll(AgentSettings.SUGGESTED_MODELS);
-        model.getEditor().setText(a.getModel());
-        model.setMaxWidth(Double.MAX_VALUE);
-        permissionMode.getItems().setAll(AgentSettings.PERMISSION_MODES);
-        permissionMode.setValue(a.getPermissionMode());
-        allowedTools.setText(a.getAllowedTools());
-        allowedTools.setPromptText("e.g. Bash(mvn test:*) Bash(git status) mcp__juno-github");
-        maxTurns.getValueFactory().setValue(a.getMaxTurns());
-        maxAgents.getValueFactory().setValue(Math.max(1, a.getMaxConcurrentAgents()));
-        apiKey.setText(a.getApiKey());
-        apiKey.setPromptText("Blank = use the CLI's own login / environment");
-        baseUrl.setText(a.getBaseUrl());
-        baseUrl.setPromptText("Blank = Anthropic default");
-        extraArgs.setText(a.getExtraArgs());
-        exposeMcp.setSelected(a.isExposeTrackerMcp());
-
-        Button browse = fileBrowse(cliPath, "Claude Code executable");
-        HBox cliRow = new HBox(6, cliPath, browse);
-        HBox.setHgrow(cliPath, Priority.ALWAYS);
-
-        GridPane grid = new GridPane();
-        formGrid(grid);
-        int row = 0;
-        grid.add(sectionTitle("Claude instance"), 0, row++, 2, 1);
-        grid.addRow(row++, new Label("Claude Code CLI"), cliRow);
-        grid.addRow(row++, new Label("API key"), apiKey);
-        grid.addRow(row++, new Label("Base URL"), baseUrl);
-        grid.add(hint("Agents run as 'claude -p' processes in the ticket's project directory. Leave the key blank "
-                + "to use your existing Claude login; set a base URL to route through a gateway."), 0, row++, 2, 1);
-        grid.add(sectionTitle("Model and behaviour"), 0, row++, 2, 1);
-        grid.addRow(row++, new Label("Model"), model);
-        grid.addRow(row++, new Label("Permission mode"), permissionMode);
-        grid.addRow(row++, new Label("Allowed tools"), allowedTools);
-        grid.addRow(row++, new Label("Max turns (0 = no limit)"), maxTurns);
-        grid.addRow(row++, new Label("Max concurrent agents"), maxAgents);
-        grid.addRow(row++, new Label("Extra CLI arguments"), extraArgs);
-        grid.add(exposeMcp, 1, row++);
-        grid.add(hint("In headless mode, tools that need approval are refused unless the permission mode or the "
-                + "allowed-tools list permits them. 'acceptEdits' lets agents edit files; add Bash rules (e.g. your "
-                + "build/test commands) so they can verify their work. MCP tools must be allowed explicitly "
-                + "(e.g. mcp__juno-github)."), 0, row, 2, 1);
-        return grid;
+    /** Where a profile is assigned in settings (ticket-level assignments live on the board). */
+    private String usageOf(AgentProfile a) {
+        List<String> uses = new ArrayList<>();
+        for (Organisation o : working.getOrganisations()) {
+            if (a.getId().equals(o.getAgentProfileId())) {
+                uses.add("organisation " + o.getName());
+            }
+        }
+        for (Project p : working.getProjects()) {
+            if (a.getId().equals(p.getAgentProfileId())) {
+                uses.add("project " + p.getName());
+            }
+        }
+        return uses.isEmpty() ? "Not assigned to any organisation or project (tickets may still use it)."
+                : String.join(", ", uses);
     }
 
-    // ---- integrations -----------------------------------------------------------------------
+    private void removeAgent() {
+        AgentProfile a = agentList.getSelectionModel().getSelectedItem();
+        if (a == null || !Fx.confirm(getDialogPane().getScene().getWindow(), "Remove agent " + a.getName() + "?",
+                "Used by: " + usageOf(a) + "\n\nWherever it was assigned, tickets fall back to the next level "
+                        + "(ticket → project → organisation).")) {
+            return;
+        }
+        for (Organisation o : working.getOrganisations()) {
+            if (a.getId().equals(o.getAgentProfileId())) {
+                o.setAgentProfileId(null);
+            }
+        }
+        for (Project p : working.getProjects()) {
+            if (a.getId().equals(p.getAgentProfileId())) {
+                p.setAgentProfileId(null);
+            }
+        }
+        working.getAgentProfiles().remove(a);
+        agentList.getItems().remove(a);
+    }
 
-    private Node buildIntegrationsTab() {
+    private void withAgent(Consumer<AgentProfile> change) {
+        AgentProfile a = agentList.getSelectionModel().getSelectedItem();
+        if (!loading && a != null) {
+            change.accept(a);
+        }
+    }
+
+    private void bindAgent(TextInputControl field, BiConsumer<AgentProfile, String> setter) {
+        field.textProperty().addListener((obs, old, value) -> withAgent(a -> setter.accept(a, value.strip())));
+    }
+
+    // =========================================================================================
+    // General
+    // =========================================================================================
+
+    private Node buildGeneralTab() {
         GridPane grid = new GridPane();
         formGrid(grid);
         int row = 0;
+        grid.add(sectionTitle("MCP servers"), 0, row++, 2, 1);
         for (TrackerKind kind : TrackerKind.values()) {
-            TrackerSettings t = working.tracker(kind);
-            TextField url = new TextField(t.getApiUrl());
-            PasswordField token = new PasswordField();
-            token.setText(t.getToken());
-            token.setPromptText("Blank = inherit " + (kind == TrackerKind.GITLAB ? "GITLAB_TOKEN" : "GITHUB_TOKEN")
-                    + " from the environment");
-            TextField jar = new TextField(t.getMcpJar());
-            trackerUrl.put(kind, url);
-            trackerToken.put(kind, token);
-            trackerJar.put(kind, jar);
-
-            Button browse = fileBrowse(jar, kind.displayName() + " MCP server jar");
-            HBox jarRow = new HBox(6, jar, browse);
+            TextField jar = new TextField(working.mcpJar(kind));
+            mcpJar.put(kind, jar);
+            HBox jarRow = new HBox(6, jar, fileBrowse(jar, kind.displayName() + " MCP server jar"));
             HBox.setHgrow(jar, Priority.ALWAYS);
-
-            Button test = new Button("Test MCP server");
-            Label result = new Label();
-            result.setWrapText(true);
-            test.setOnAction(e -> {
-                commitAgentAndIntegrations();
-                JunoSettings candidate = service.store().copy(working, JunoSettings.class);
-                result.setText("Starting " + kind.displayName() + " MCP server…");
-                test.setDisable(true);
-                Fx.async(() -> service.testTracker(candidate, kind), tools -> {
-                    test.setDisable(false);
-                    result.setText("OK - tools: " + String.join(", ", tools));
-                }, err -> {
-                    test.setDisable(false);
-                    result.setText("Failed: " + err.getMessage());
-                });
-            });
-            HBox testRow = new HBox(8, test, result);
-            testRow.setAlignment(Pos.CENTER_LEFT);
-
-            grid.add(sectionTitle(kind.displayName()), 0, row++, 2, 1);
-            grid.addRow(row++, new Label(kind == TrackerKind.GITLAB ? "Instance URL" : "API URL"), url);
-            grid.addRow(row++, new Label("Access token"), token);
-            grid.addRow(row++, new Label("MCP server jar"), jarRow);
-            grid.add(testRow, 1, row++);
+            grid.addRow(row++, new Label(kind.displayName() + " MCP jar"), jarRow);
         }
         javaExecutable.setText(working.getJavaExecutable());
         javaExecutable.setPromptText("Blank = the Java runtime running Juno");
-        Button browseJava = fileBrowse(javaExecutable, "Java executable");
-        HBox javaRow = new HBox(6, javaExecutable, browseJava);
+        HBox javaRow = new HBox(6, javaExecutable, fileBrowse(javaExecutable, "Java executable"));
         HBox.setHgrow(javaExecutable, Priority.ALWAYS);
-        grid.add(sectionTitle("Runtime"), 0, row++, 2, 1);
         grid.addRow(row++, new Label("Java for MCP servers"), javaRow);
-        grid.add(hint("Tokens are stored in plain text in ~/.juno/settings.json. Prefer leaving them blank and "
-                + "setting GITLAB_TOKEN / GITHUB_TOKEN in your environment."), 0, row, 2, 1);
+        grid.add(hint("The same jars serve every organisation; each organisation gets its own server process "
+                + "with its own credentials."), 1, row++);
+        grid.add(sectionTitle("Agents"), 0, row++, 2, 1);
+        maxAgents.getValueFactory().setValue(Math.max(1, working.getMaxConcurrentAgents()));
+        grid.addRow(row, new Label("Max concurrent agents"), maxAgents);
         return grid;
     }
 
-    private void commitAgentAndIntegrations() {
-        AgentSettings a = working.getAgent();
-        a.setCliPath(cliPath.getText().strip());
-        String modelText = model.getEditor().getText();
-        a.setModel(modelText == null || modelText.isBlank() ? model.getValue() : modelText.strip());
-        a.setPermissionMode(permissionMode.getValue());
-        a.setAllowedTools(allowedTools.getText().strip());
-        a.setMaxTurns(maxTurns.getValue());
-        a.setMaxConcurrentAgents(maxAgents.getValue());
-        a.setApiKey(apiKey.getText().strip());
-        a.setBaseUrl(baseUrl.getText().strip());
-        a.setExtraArgs(extraArgs.getText().strip());
-        a.setExposeTrackerMcp(exposeMcp.isSelected());
+    private void commitGeneral() {
         for (TrackerKind kind : TrackerKind.values()) {
-            TrackerSettings t = working.tracker(kind);
-            t.setApiUrl(trackerUrl.get(kind).getText().strip());
-            t.setToken(trackerToken.get(kind).getText().strip());
-            t.setMcpJar(trackerJar.get(kind).getText().strip());
+            working.setMcpJar(kind, mcpJar.get(kind).getText().strip());
         }
         working.setJavaExecutable(javaExecutable.getText().strip());
+        working.setMaxConcurrentAgents(maxAgents.getValue());
     }
 
-    // ---- helpers ----------------------------------------------------------------------------
+    // =========================================================================================
+    // helpers
+    // =========================================================================================
+
+    /** Writes a text field into the selected tree object (organisation or project) as it changes. */
+    private <T> void bind(TextInputControl field, Class<T> type, BiConsumer<T, String> setter) {
+        field.textProperty().addListener((obs, old, value) -> {
+            Object item = selected();
+            if (!loading && type.isInstance(item)) {
+                setter.accept(type.cast(item), value.strip());
+            }
+        });
+    }
 
     private Button fileBrowse(TextInputControl target, String title) {
         Button b = new Button("Browse…");
@@ -387,7 +760,7 @@ final class SettingsDialog extends Dialog<JunoSettings> {
     private static void formGrid(GridPane grid) {
         grid.setHgap(10);
         grid.setVgap(10);
-        grid.setPadding(new Insets(12));
+        grid.setPadding(new Insets(4, 12, 12, 12));
         ColumnConstraints labels = new ColumnConstraints();
         labels.setMinWidth(160);
         ColumnConstraints fields = new ColumnConstraints();

@@ -1,6 +1,8 @@
 package dev.juno.main.ui;
 
+import dev.juno.main.model.AgentAssignment;
 import dev.juno.main.model.ExternalRef;
+import dev.juno.main.model.Organisation;
 import dev.juno.main.model.Project;
 import dev.juno.main.model.Ticket;
 import dev.juno.main.model.TicketStatus;
@@ -62,14 +64,24 @@ final class TicketCard {
                     + "-fx-border-width: 0 0 0 5;");
         });
 
-        Label meta = new Label(ticket.getId() + project.map(p -> "  ·  " + p.getName()).orElse("  ·  no project"));
+        String org = service.organisationOf(ticket).map(Organisation::getName).orElse(null);
+        Label meta = new Label(ticket.getId() + "  ·  "
+                + project.map(p -> (org == null ? "" : org + "  ·  ") + p.getName()).orElse("no project"));
         meta.getStyleClass().add("card-meta");
+        meta.setWrapText(true);
 
         Label title = new Label(ticket.getTitle().isBlank() ? "(untitled)" : ticket.getTitle());
         title.getStyleClass().add("card-title");
         title.setWrapText(true);
         title.setMaxWidth(Double.MAX_VALUE);
         card.getChildren().addAll(meta, title);
+
+        Optional<AgentAssignment> agent = service.agentFor(ticket);
+        Label agentLabel = new Label("Agent: " + agent.map(a -> a.profile().getName()).orElse("none assigned"));
+        agentLabel.getStyleClass().add(agent.isPresent() ? "card-agent" : "card-agent-missing");
+        agentLabel.setTooltip(new Tooltip(agent.map(AgentAssignment::describe)
+                .orElse("No agent on the ticket, its project or its organisation")));
+        card.getChildren().add(agentLabel);
 
         FlowPane links = new FlowPane(6, 2);
         for (TrackerKind kind : TrackerKind.values()) {

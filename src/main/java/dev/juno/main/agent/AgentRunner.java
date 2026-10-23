@@ -1,6 +1,7 @@
 package dev.juno.main.agent;
 
-import dev.juno.main.model.AgentSettings;
+import dev.juno.main.model.AgentProfile;
+import dev.juno.main.model.Secrets;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -35,11 +36,12 @@ public final class AgentRunner {
      * @param workDir         project directory the agent works in
      * @param prompt          prompt sent on stdin
      * @param resumeSessionId session to continue, or null for a fresh session
-     * @param settings        agent settings snapshot
+     * @param settings        snapshot of the effective agent profile (allowed tools already merged)
      * @param mcpConfig       optional {@code --mcp-config} file, or null
+     * @param agentLabel      human description of the agent and where it was assigned, for the log
      */
     public record Request(String ticketId, Path workDir, String prompt, String resumeSessionId,
-                          AgentSettings settings, Path mcpConfig) {
+                          AgentProfile settings, Path mcpConfig, String agentLabel) {
     }
 
     private static final class Run {
@@ -77,9 +79,10 @@ public final class AgentRunner {
         List<String> command = buildCommand(request.settings(), request.resumeSessionId(), request.mcpConfig(),
                 isWindows());
         ProcessBuilder pb = new ProcessBuilder(command).directory(request.workDir().toFile());
-        AgentSettings s = request.settings();
-        if (notBlank(s.getApiKey())) {
-            pb.environment().put("ANTHROPIC_API_KEY", s.getApiKey().trim());
+        AgentProfile s = request.settings();
+        String apiKey = Secrets.resolve(s.getApiKey());
+        if (apiKey != null) {
+            pb.environment().put("ANTHROPIC_API_KEY", apiKey);
         }
         if (notBlank(s.getBaseUrl())) {
             pb.environment().put("ANTHROPIC_BASE_URL", s.getBaseUrl().trim());
@@ -87,7 +90,7 @@ public final class AgentRunner {
 
         listener.log(request.ticketId(), "");
         listener.log(request.ticketId(), "=== " + (request.resumeSessionId() == null ? "Starting" : "Resuming")
-                + " agent in " + request.workDir() + " ===");
+                + " agent " + request.agentLabel() + " in " + request.workDir() + " ===");
         listener.log(request.ticketId(), "$ " + String.join(" ", command));
 
         Process process;
@@ -186,7 +189,7 @@ public final class AgentRunner {
 
     // ---- command line -----------------------------------------------------------------------
 
-    public static List<String> buildCommand(AgentSettings s, String resumeSessionId, Path mcpConfig,
+    public static List<String> buildCommand(AgentProfile s, String resumeSessionId, Path mcpConfig,
                                             boolean windows) {
         List<String> cmd = new ArrayList<>();
         String cli = notBlank(s.getCliPath()) ? s.getCliPath().trim() : "claude";

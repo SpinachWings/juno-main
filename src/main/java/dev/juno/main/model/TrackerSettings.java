@@ -1,21 +1,31 @@
 package dev.juno.main.model;
 
-/** Connection settings for one tracker and the MCP server jar that talks to it. */
+/** One organisation's connection to GitLab or GitHub. */
 public final class TrackerSettings {
 
+    private boolean enabled;
     /** GitLab instance URL or GitHub API URL. */
     private String apiUrl = "";
-    /** Access token; when blank the MCP server inherits GITLAB_TOKEN / GITHUB_TOKEN from Juno's environment. */
+    /**
+     * Access token, or {@code env:VARIABLE} to read it from Juno's environment. When blank the MCP server
+     * inherits GITLAB_TOKEN / GITHUB_TOKEN from Juno's environment.
+     */
     private String token = "";
-    /** Path to the built MCP server jar (juno-gitlab-mcp.jar / juno-github-mcp.jar). */
-    private String mcpJar = "";
 
     public TrackerSettings() {
     }
 
-    public TrackerSettings(String apiUrl, String mcpJar) {
+    public TrackerSettings(boolean enabled, String apiUrl) {
+        this.enabled = enabled;
         this.apiUrl = apiUrl;
-        this.mcpJar = mcpJar;
+    }
+
+    public boolean isEnabled() {
+        return enabled;
+    }
+
+    public void setEnabled(boolean enabled) {
+        this.enabled = enabled;
     }
 
     public String getApiUrl() {
@@ -34,11 +44,8 @@ public final class TrackerSettings {
         this.token = token;
     }
 
-    public String getMcpJar() {
-        return mcpJar;
-    }
-
-    public void setMcpJar(String mcpJar) {
-        this.mcpJar = mcpJar;
+    /** The token with {@code env:VAR} references resolved; null if blank or the variable is unset. */
+    public String resolvedToken() {
+        return Secrets.resolve(token);
     }
 }

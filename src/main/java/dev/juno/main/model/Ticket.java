@@ -12,6 +12,8 @@ public final class Ticket {
     private String projectId;
     private ExternalRef gitlab;
     private ExternalRef github;
+    /** Agent profile override for this ticket; null = inherit from the project, then the organisation. */
+    private String agentProfileId;
 
     /** Claude Code session id of the most recent agent run, used to resume after a decision. */
     private String agentSessionId;
@@ -82,6 +84,14 @@ public final class Ticket {
         } else {
             github = ref;
         }
+    }
+
+    public String getAgentProfileId() {
+        return agentProfileId;
+    }
+
+    public void setAgentProfileId(String agentProfileId) {
+        this.agentProfileId = agentProfileId;
     }
 
     public String getAgentSessionId() {

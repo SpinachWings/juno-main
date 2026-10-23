@@ -1,6 +1,9 @@
 package dev.juno.main.ui;
 
+import dev.juno.main.model.AgentProfile;
 import dev.juno.main.model.ExternalRef;
+import dev.juno.main.model.JunoSettings;
+import dev.juno.main.model.Organisation;
 import dev.juno.main.model.Project;
 import dev.juno.main.model.Ticket;
 import dev.juno.main.model.TrackerKind;
@@ -28,6 +31,7 @@ import javafx.scene.layout.VBox;
 import javafx.stage.Window;
 
 import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -38,14 +42,15 @@ import java.util.Optional;
  */
 final class TicketDetailsDialog extends Dialog<ButtonType> {
 
-    private record ProjectItem(String id, String name) {
+    /** Combo entry for a project or agent profile; {@code id == null} means none / inherit. */
+    private record Item(String id, String name) {
         @Override
         public String toString() {
             return name;
         }
     }
 
-    private static final ProjectItem NO_PROJECT = new ProjectItem(null, "— none —");
+    private static final Item NO_PROJECT = new Item(null, "— none —");
 
     private final BoardService service;
     private final Ticket ticket;
@@ -54,7 +59,11 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
 
     private final TextField title = new TextField();
     private final TextArea description = new TextArea();
-    private final ComboBox<ProjectItem> project = new ComboBox<>();
+    private final ComboBox<Organisation> organisation = new ComboBox<>();
+    private final ComboBox<Item> project = new ComboBox<>();
+    private final ComboBox<Item> agent = new ComboBox<>();
+    private final Label agentHint = new Label();
+    private boolean loading;
     private final Map<TrackerKind, HBox> linkRows = new EnumMap<>(TrackerKind.class);
     private final VBox actionsBox = new VBox(8);
     private final Label status = new Label();
@@ -86,6 +95,8 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
             if (title.getText().isBlank()) {
                 status.setText("A title is required.");
                 e.consume();
+            } else if (!confirmProjectChange()) {
+                e.consume();
             }
         });
 
@@ -107,11 +118,24 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         description.setWrapText(true);
         description.setPrefRowCount(20);
 
-        project.getItems().add(NO_PROJECT);
-        for (Project p : service.settings().getProjects()) {
-            project.getItems().add(new ProjectItem(p.getId(), p.getName()));
-        }
+        organisation.getItems().setAll(service.settings().getOrganisations());
+        organisation.setMaxWidth(Double.MAX_VALUE);
+        organisation.setOnAction(e -> {
+            if (!loading) {
+                fillProjects(organisation.getValue(), null);
+                fillAgents(selectedAgentId());
+            }
+        });
         project.setMaxWidth(Double.MAX_VALUE);
+        project.setOnAction(e -> {
+            if (!loading) {
+                fillAgents(selectedAgentId());
+            }
+        });
+        agent.setMaxWidth(Double.MAX_VALUE);
+        agentHint.getStyleClass().add("hint");
+        agentHint.setText("A ticket agent overrides the project's, which overrides the organisation's.");
+        VBox agentBox = new VBox(2, agent, agentHint);
 
         GridPane form = new GridPane();
         form.setHgap(10);
@@ -121,10 +145,12 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         fields.setHgrow(Priority.ALWAYS);
         form.getColumnConstraints().addAll(labels, fields);
         form.addRow(0, new Label("Title"), title);
-        form.addRow(1, new Label("Project"), project);
+        form.addRow(1, new Label("Organisation"), organisation);
+        form.addRow(2, new Label("Project"), project);
+        form.addRow(3, new Label("Agent"), agentBox);
         Label descLabel = new Label("Description");
         GridPane.setValignment(descLabel, javafx.geometry.VPos.TOP);
-        form.addRow(2, descLabel, description);
+        form.addRow(4, descLabel, description);
         GridPane.setVgrow(description, Priority.ALWAYS);
 
         VBox links = new VBox(4);
@@ -134,7 +160,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
             linkRows.put(kind, row);
             links.getChildren().add(row);
         }
-        form.addRow(3, new Label("Linked issues"), links);
+        form.addRow(5, new Label("Linked issues"), links);
 
         // The sync "menu".
         Label menuTitle = new Label("Sync");
@@ -148,8 +174,9 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
             actionsBox.getChildren().add(actionButton("Import ticket info from " + kind.displayName(),
                     () -> importFrom(kind)));
         }
-        Label hint = new Label("Linking to a project happens automatically on import when the GitLab project "
-                + "or GitHub repo matches one configured in Settings.");
+        Label hint = new Label("Uploads and imports use the ticket's organisation's credentials. On import, the "
+                + "ticket is linked automatically to the organisation's project configured for that GitLab "
+                + "project / GitHub repo.");
         hint.setWrapText(true);
         hint.getStyleClass().add("hint");
         actionsBox.getChildren().add(hint);
@@ -181,12 +208,80 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
     }
 
     private void loadFromTicket() {
-        title.setText(ticket.getTitle());
-        description.setText(ticket.getDescription());
-        project.setValue(project.getItems().stream()
-                .filter(i -> Objects.equals(i.id(), ticket.getProjectId()))
-                .findFirst().orElse(NO_PROJECT));
+        loading = true;
+        try {
+            title.setText(ticket.getTitle());
+            description.setText(ticket.getDescription());
+            List<Organisation> orgs = service.settings().getOrganisations();
+            Organisation org = service.organisationOf(ticket).orElse(orgs.isEmpty() ? null : orgs.getFirst());
+            organisation.setValue(org);
+            fillProjects(org, ticket.getProjectId());
+            fillAgents(ticket.getAgentProfileId());
+        } finally {
+            loading = false;
+        }
         refreshLinks();
+    }
+
+    private void fillProjects(Organisation org, String selectId) {
+        boolean wasLoading = loading;
+        loading = true;
+        try {
+            project.getItems().setAll(NO_PROJECT);
+            if (org != null) {
+                for (Project p : service.settings().projectsIn(org.getId())) {
+                    project.getItems().add(new Item(p.getId(), p.getName()));
+                }
+            }
+            project.setValue(project.getItems().stream()
+                    .filter(i -> selectId != null && selectId.equals(i.id()))
+                    .findFirst().orElse(NO_PROJECT));
+        } finally {
+            loading = wasLoading;
+        }
+    }
+
+    /** Rebuilds the agent list; the first entry describes what the ticket would inherit. */
+    private void fillAgents(String selectId) {
+        boolean wasLoading = loading;
+        loading = true;
+        try {
+            JunoSettings settings = service.settings();
+            String inherited = settings.project(selectedProjectId())
+                    .flatMap(settings::resolveAgent)
+                    .map(a -> "Inherit: " + a.describe())
+                    .orElse(selectedProjectId() == null
+                            ? "Inherit (choose a project first)"
+                            : "Inherit: none assigned on the project or organisation");
+            agent.getItems().setAll(new Item(null, inherited));
+            for (AgentProfile profile : settings.getAgentProfiles()) {
+                agent.getItems().add(new Item(profile.getId(), profile.getName()));
+            }
+            agent.setValue(agent.getItems().stream()
+                    .filter(i -> selectId != null && selectId.equals(i.id()))
+                    .findFirst().orElse(agent.getItems().getFirst()));
+        } finally {
+            loading = wasLoading;
+        }
+    }
+
+    private String selectedProjectId() {
+        return project.getValue() == null ? null : project.getValue().id();
+    }
+
+    private String selectedAgentId() {
+        return agent.getValue() == null ? null : agent.getValue().id();
+    }
+
+    /** Warns when moving the ticket to another organisation would drop its issue links. */
+    private boolean confirmProjectChange() {
+        String projectId = selectedProjectId();
+        if (!Objects.equals(projectId, ticket.getProjectId()) && service.wouldDropLinks(ticket, projectId)) {
+            return Fx.confirm(getDialogPane().getScene().getWindow(), "Move to another organisation?",
+                    "This ticket's GitLab/GitHub links were made with its current organisation's credentials "
+                            + "and will be removed. Continue?");
+        }
+        return true;
     }
 
     private void refreshLinks() {
@@ -219,18 +314,30 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         }
     }
 
-    /** Copies the form into the ticket and persists it. */
+    /** Copies the form into the ticket and persists it (call {@link #confirmProjectChange()} first). */
     private void applyEdits() {
+        String projectId = selectedProjectId();
+        if (!Objects.equals(projectId, ticket.getProjectId())) {
+            service.assignProject(ticket, projectId);
+        }
         ticket.setTitle(title.getText().strip());
         ticket.setDescription(description.getText());
-        ProjectItem selected = project.getValue();
-        ticket.setProjectId(selected == null ? null : selected.id());
+        ticket.setAgentProfileId(selectedAgentId());
         service.saveTicket(ticket);
+        refreshLinks();
     }
 
     private void upload(TrackerKind kind) {
         if (title.getText().isBlank()) {
             status.setText("Add a title before uploading.");
+            return;
+        }
+        if (selectedProjectId() == null) {
+            status.setText("Choose a project first: its organisation's " + kind.displayName()
+                    + " credentials are used for the upload.");
+            return;
+        }
+        if (!confirmProjectChange()) {
             return;
         }
         applyEdits();
@@ -257,7 +364,6 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         setBusy(true, "Uploading to " + kind.displayName() + "…");
         Fx.async(() -> service.upload(ticket.getId(), kind, location), ref -> {
             setBusy(false, (existing != null ? "Updated " : "Created ") + kind.displayName() + " issue " + ref.display());
-            loadProjectOnly();
             refreshLinks();
         }, err -> {
             setBusy(false, "Upload failed.");
@@ -267,9 +373,14 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
 
     private void importFrom(TrackerKind kind) {
         ExternalRef existing = ticket.getRef(kind);
-        String location = service.defaultLocation(ticket, kind);
-        Long number = existing == null ? null : existing.number();
-        new IssuePickerDialog(getDialogPane().getScene().getWindow(), service, kind, location, number)
+        Organisation org = organisation.getValue();
+        // Only reuse the existing link if the form still points at the ticket's current organisation.
+        boolean sameOrg = org != null && service.organisationOf(ticket).map(o -> o.getId().equals(org.getId()))
+                .orElse(false);
+        String location = existing != null && sameOrg ? existing.location() : null;
+        Long number = existing != null && sameOrg ? existing.number() : null;
+        new IssuePickerDialog(getDialogPane().getScene().getWindow(), service, kind,
+                org == null ? null : org.getId(), selectedProjectId(), location, number)
                 .showAndWait()
                 .ifPresent(sel -> {
                     boolean hasContent = !title.getText().isBlank() || !description.getText().isBlank();
@@ -278,16 +389,16 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
                                     + sel.location() + "#" + sel.number() + ".")) {
                         return;
                     }
-                    // Keep any project choice made in the form unless the import links one.
-                    ProjectItem chosen = project.getValue();
-                    ticket.setProjectId(chosen == null ? null : chosen.id());
+                    // Keep the agent choice made in the form; the import sets project, title and description.
+                    ticket.setAgentProfileId(selectedAgentId());
                     setBusy(true, "Importing from " + kind.displayName() + "…");
                     Fx.async(() -> {
-                        service.importIssue(ticket.getId(), kind, sel.location(), sel.number());
+                        service.importIssue(ticket.getId(), sel.projectId(), kind, sel.location(), sel.number());
                         return null;
                     }, ok -> {
                         loadFromTicket();
-                        String linked = service.projectOf(ticket).map(p -> " and linked to project " + p.getName())
+                        String linked = service.projectOf(ticket).map(p -> " into project " + p.getName()
+                                + service.organisationOf(ticket).map(o -> " (" + o.getName() + ")").orElse(""))
                                 .orElse("");
                         setBusy(false, "Imported " + sel.location() + "#" + sel.number() + linked + ".");
                     }, err -> {
@@ -295,12 +406,6 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
                         Fx.error(getDialogPane().getScene().getWindow(), "Import from " + kind.displayName() + " failed", err);
                     });
                 });
-    }
-
-    private void loadProjectOnly() {
-        project.setValue(project.getItems().stream()
-                .filter(i -> Objects.equals(i.id(), ticket.getProjectId()))
-                .findFirst().orElse(NO_PROJECT));
     }
 
     private void setBusy(boolean isBusy, String message) {

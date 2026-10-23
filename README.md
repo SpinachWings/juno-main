@@ -36,23 +36,54 @@ mvn javafx:run
 
 `mvn javafx:jlink` builds a self-contained runtime image with a `juno` launcher in `target/juno`.
 
+## Organisations, projects and agents
+
+```
+Organisation   GitLab / GitHub integration (URL + token), default agent
+ └─ Project    local directory, colour, GitLab project / GitHub repo, optional agent, extra allowed tools
+     └─ Ticket optional agent
+```
+
+- **Organisations** are credential boundaries. Each one runs its own GitLab/GitHub MCP server process with
+  only its own token. An agent only ever gets its ticket's organisation's servers.
+- **Agent profiles** (Claude instance, model, permissions) are defined once under **Settings → Agents**.
+  They can be assigned to an organisation, a project or a ticket. The most specific one wins:
+  **ticket → project → organisation**.
+- **Repo matching is per organisation.** Importing `acme/api` in one organisation never links to another
+  organisation's project with the same repo name.
+- The board has an **Organisation** filter and a **Project** filter. With *All organisations*, the project
+  list shows every project from every organisation. Cards show `ID · Organisation · Project`, the title,
+  and the agent that will run. Each card is tinted with its project's colour.
+
+Settings written by earlier versions are migrated automatically on first start:
+- The single GitLab/GitHub setup becomes a "Default" organisation.
+- The single agent becomes "Default agent", assigned to that organisation.
+- Existing projects move into the Default organisation.
+
+The original file is kept as `settings.pre-orgs.json`.
+
 ## Using it
 
-1. **Settings → Projects**: add each codebase with its local directory, a colour (cards linked to the
-   project are tinted with it), and optionally its GitLab project (`group/project`) and GitHub repo
-   (`owner/repo`).
-2. **Settings → Agent**: choose the Claude Code executable, the model, the permission mode, allowed tools,
-   max turns, and an optional API key or base URL. Leave the key blank to use your existing `claude` login.
-3. **Settings → Integrations**: set the GitLab URL and GitHub API URL, the tokens, and the MCP jar paths.
-   If the three repos sit side by side, the jar paths are filled in for you. Use **Test MCP server** to
-   check each one starts.
-4. Use **+ New ticket** or **Import issue**. On a card, **Details** opens the ticket menu:
+1. **Settings → Organisations & projects**: add an organisation, enable GitLab and/or GitHub for it with a
+   URL and token, and pick its default agent. Add projects under it: directory, colour (cards are tinted
+   with it), GitLab project / GitHub repo, and optionally their own agent and extra allowed tools (e.g. the
+   project's build/test commands).
+2. **Settings → Agents**: create agent profiles. Each sets the Claude Code program, model, permission
+   mode, allowed tools, max turns, and an optional API key or server URL. Leave the key blank to use your
+   existing `claude` login.
+3. **Settings → General**: the MCP jar paths (filled in automatically when the repos sit side by side),
+   the Java runtime for them, and the overall limit on concurrent agents.
+4. Use **+ New ticket** or **Import issue**. Import asks for the organisation and project first, because
+   their credentials are used. On a card, **Details** opens the ticket menu:
    - edit the title and full description
-   - link the ticket to a project (filled in automatically on import when the repo/project matches)
+   - set the organisation, project and agent override
    - upload ticket info to GitLab or GitHub (creates the issue, or updates the linked one)
-   - import ticket info from GitLab or GitHub (pick from open issues or enter a number)
-5. **Start** runs `claude -p --output-format stream-json …` in the project directory, with the ticket as
-   the prompt. **Log** shows live agent activity.
+   - import ticket info from GitLab or GitHub
+
+   Moving a ticket to a project in another organisation removes its issue links, after a warning, since
+   they belong to the old organisation's credentials.
+5. **Start** runs the resolved agent with `claude -p --output-format stream-json …` in the project
+   directory, using the ticket as the prompt. **Log** shows live activity.
 
 ### How agents ask for decisions
 
@@ -78,21 +109,21 @@ GitLab/GitHub MCP tools*, also allow `mcp__juno-gitlab` and/or `mcp__juno-github
 Everything is stored in `~/.juno` (override with the `JUNO_HOME` environment variable):
 
 - `board.json`: tickets
-- `settings.json`: projects, agent and integration settings. **Tokens and API keys entered in Settings
-  are stored here in plain text.** Prefer leaving them blank and setting `GITLAB_TOKEN`, `GITHUB_TOKEN` or
-  `ANTHROPIC_API_KEY` in your environment.
+- `settings.json`: organisations, projects, agent profiles and integration settings. **Tokens and API
+  keys typed into Settings are stored here in plain text.** Prefer `env:VARIABLE` references (for example
+  `env:ACME_GITLAB_TOKEN`), which are read from Juno's environment when needed.
 - `logs/<ticket>.log`: agent activity
-- `agent-mcp.json`: generated MCP config for agents, when enabled
+- `agent-mcp/<ticket>.json`: per-run MCP config for agents (only that ticket's organisation's servers)
 
 ## Layout
 
 ```
 dev.juno.main
 ├── JunoApp              JavaFX entry point
-├── model                Ticket, Project, settings (plain Jackson-mapped classes)
+├── model                Organisation, Project, Ticket, AgentProfile, settings + agent resolution
 ├── store                JSON persistence in ~/.juno
 ├── mcp                  stdio MCP client
-├── integration          GitLab/GitHub via the MCP servers
+├── integration          GitLab/GitHub via per-organisation MCP server processes
 ├── agent                Claude Code process runner, stream-json parser, prompts
 ├── service              BoardService: orchestration, thread-safe, UI-agnostic
 └── ui                   Board, cards, dialogs

@@ -170,3 +170,17 @@
     -fx-text-fill: -muted;
     -fx-font-size: 11px;
 }
+
+.card-agent {
+    -fx-text-fill: -muted;
+    -fx-font-size: 11px;
+}
+
+.card-agent-missing {
+    -fx-text-fill: #B3261E;
+    -fx-font-size: 11px;
+}
+
+.tree-org {
+    -fx-font-weight: bold;
+}

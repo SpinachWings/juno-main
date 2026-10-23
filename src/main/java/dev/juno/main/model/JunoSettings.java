@@ -6,30 +6,82 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
-/** Everything configurable from the Settings dialog. Persisted as {@code settings.json}. */
+/**
+ * Everything configurable from the Settings dialog. Persisted as {@code settings.json}.
+ *
+ * <p>Hierarchy: organisations (GitLab/GitHub credentials, default agent) contain projects (directory, colour,
+ * repos, optional agent), which contain tickets (optional agent). Agent profiles are defined once and assigned
+ * at any of those levels; the most specific assignment wins.
+ */
 public final class JunoSettings {
 
+    private List<Organisation> organisations = new ArrayList<>();
     private List<Project> projects = new ArrayList<>();
-    private AgentSettings agent = new AgentSettings();
-    private TrackerSettings gitlab = new TrackerSettings("https://gitlab.com", defaultJar("juno-gitlab-mcp"));
-    private TrackerSettings github = new TrackerSettings("https://api.github.com", defaultJar("juno-github-mcp"));
+    private List<AgentProfile> agentProfiles = new ArrayList<>();
+
+    /** MCP server jars are shared code; each organisation runs its own instance with its own credentials. */
+    private String gitlabMcpJar = defaultJar("juno-gitlab-mcp");
+    private String githubMcpJar = defaultJar("juno-github-mcp");
     /** Java executable used to launch the MCP servers; blank means the JVM running Juno. */
     private String javaExecutable = "";
+    /** Maximum number of agents running at once across all organisations. */
+    private int maxConcurrentAgents = 3;
+
+    /** Settings for a fresh install: one organisation with one agent profile assigned to it. */
+    public static JunoSettings createDefault() {
+        JunoSettings s = new JunoSettings();
+        AgentProfile agent = new AgentProfile("Default agent");
+        Organisation org = new Organisation("Default");
+        org.setAgentProfileId(agent.getId());
+        s.agentProfiles.add(agent);
+        s.organisations.add(org);
+        return s;
+    }
+
+    /** Repairs references after loading (e.g. projects whose organisation was removed by hand). */
+    public void normalise() {
+        if (organisations.isEmpty() && !projects.isEmpty()) {
+            organisations.add(new Organisation("Default"));
+        }
+        for (Project p : projects) {
+            if (organisation(p.getOrgId()).isEmpty()) {
+                p.setOrgId(organisations.getFirst().getId());
+            }
+            if (p.getAgentProfileId() != null && agentProfile(p.getAgentProfileId()).isEmpty()) {
+                p.setAgentProfileId(null);
+            }
+        }
+        for (Organisation o : organisations) {
+            if (o.getAgentProfileId() != null && agentProfile(o.getAgentProfileId()).isEmpty()) {
+                o.setAgentProfileId(null);
+            }
+        }
+    }
+
+    // ---- accessors --------------------------------------------------------------------------
+
+    public List<Organisation> getOrganisations() {
+        return organisations;
+    }
 
     public List<Project> getProjects() {
         return projects;
     }
 
-    public void setProjects(List<Project> projects) {
-        this.projects = projects;
+    public List<AgentProfile> getAgentProfiles() {
+        return agentProfiles;
     }
 
-    public AgentSettings getAgent() {
-        return agent;
+    public String mcpJar(TrackerKind kind) {
+        return kind == TrackerKind.GITLAB ? gitlabMcpJar : githubMcpJar;
     }
 
-    public TrackerSettings tracker(TrackerKind kind) {
-        return kind == TrackerKind.GITLAB ? gitlab : github;
+    public void setMcpJar(TrackerKind kind, String jar) {
+        if (kind == TrackerKind.GITLAB) {
+            gitlabMcpJar = jar;
+        } else {
+            githubMcpJar = jar;
+        }
     }
 
     public String getJavaExecutable() {
@@ -40,21 +92,74 @@ public final class JunoSettings {
         this.javaExecutable = javaExecutable;
     }
 
-    public Optional<Project> project(String id) {
-        if (id == null) {
-            return Optional.empty();
-        }
-        return projects.stream().filter(p -> p.getId().equals(id)).findFirst();
+    public int getMaxConcurrentAgents() {
+        return maxConcurrentAgents;
     }
 
-    /** Finds the project whose GitLab project / GitHub repo matches the given location (case-insensitive). */
-    public Optional<Project> projectForLocation(TrackerKind kind, String location) {
+    public void setMaxConcurrentAgents(int maxConcurrentAgents) {
+        this.maxConcurrentAgents = maxConcurrentAgents;
+    }
+
+    // ---- lookups ----------------------------------------------------------------------------
+
+    public Optional<Organisation> organisation(String id) {
+        return id == null ? Optional.empty()
+                : organisations.stream().filter(o -> o.getId().equals(id)).findFirst();
+    }
+
+    public Optional<Project> project(String id) {
+        return id == null ? Optional.empty()
+                : projects.stream().filter(p -> p.getId().equals(id)).findFirst();
+    }
+
+    public Optional<AgentProfile> agentProfile(String id) {
+        return id == null ? Optional.empty()
+                : agentProfiles.stream().filter(a -> a.getId().equals(id)).findFirst();
+    }
+
+    public Optional<Organisation> organisationOf(Project project) {
+        return project == null ? Optional.empty() : organisation(project.getOrgId());
+    }
+
+    public List<Project> projectsIn(String orgId) {
+        return projects.stream().filter(p -> p.getOrgId() != null && p.getOrgId().equals(orgId)).toList();
+    }
+
+    /**
+     * Finds the project in the given organisation whose GitLab project / GitHub repo matches the location
+     * (case-insensitive). Matching is scoped to the organisation because repo names can repeat across orgs.
+     */
+    public Optional<Project> projectForLocation(String orgId, TrackerKind kind, String location) {
         if (location == null || location.isBlank()) {
             return Optional.empty();
         }
-        return projects.stream()
+        return projectsIn(orgId).stream()
                 .filter(p -> p.location(kind).equalsIgnoreCase(location.trim()))
                 .findFirst();
+    }
+
+    /** The agent for a ticket: its own assignment, else its project's, else its organisation's. */
+    public Optional<AgentAssignment> resolveAgent(Ticket ticket) {
+        Optional<AgentProfile> own = agentProfile(ticket.getAgentProfileId());
+        if (own.isPresent()) {
+            return Optional.of(new AgentAssignment(own.get(), AgentAssignment.Level.TICKET, ticket.getId()));
+        }
+        Optional<Project> project = project(ticket.getProjectId());
+        if (project.isEmpty()) {
+            return Optional.empty();
+        }
+        return resolveAgent(project.get());
+    }
+
+    /** The agent a project's tickets inherit: the project's own, else its organisation's. */
+    public Optional<AgentAssignment> resolveAgent(Project project) {
+        Optional<AgentProfile> fromProject = agentProfile(project.getAgentProfileId());
+        if (fromProject.isPresent()) {
+            return Optional.of(new AgentAssignment(fromProject.get(), AgentAssignment.Level.PROJECT,
+                    project.getName()));
+        }
+        return organisationOf(project).flatMap(org -> agentProfile(org.getAgentProfileId())
+                .map(a -> new AgentAssignment(a, AgentAssignment.Level.ORGANISATION, org.getName())));
     }
 
     /**
@@ -64,9 +169,8 @@ public final class JunoSettings {
     private static String defaultJar(String artifact) {
         Path cwd = Path.of(System.getProperty("user.dir")).toAbsolutePath();
         for (Path base = cwd; base != null; base = base.getParent()) {
-            Path candidate = base.resolve(artifact).resolve("target").resolve(artifact + ".jar");
             if (Files.isDirectory(base.resolve(artifact))) {
-                return candidate.toString();
+                return base.resolve(artifact).resolve("target").resolve(artifact + ".jar").toString();
             }
         }
         Path parent = cwd.getParent() == null ? cwd : cwd.getParent();
