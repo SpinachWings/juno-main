@@ -1,0 +1,172 @@
+/* Juno board styling (applies on top of JavaFX's Modena theme). */
+
+.root {
+    -fx-font-size: 13px;
+    -board-bg: #EEF1F5;
+    -column-bg: #E2E6EC;
+    -card-bg: #FFFFFF;
+    -muted: #5F6773;
+    -accent: #3B6FD8;
+}
+
+.board-root,
+.board-scroll,
+.board-scroll > .viewport,
+.columns {
+    -fx-background-color: -board-bg;
+}
+
+.app-title {
+    -fx-font-size: 16px;
+    -fx-font-weight: bold;
+    -fx-padding: 0 6 0 2;
+}
+
+.agents-idle {
+    -fx-text-fill: -muted;
+    -fx-padding: 0 10 0 0;
+}
+
+.agents-busy {
+    -fx-text-fill: #1E8E3E;
+    -fx-font-weight: bold;
+    -fx-padding: 0 10 0 0;
+}
+
+/* ---- columns ---- */
+
+.column {
+    -fx-background-color: -column-bg;
+    -fx-background-radius: 10;
+    -fx-padding: 8 4 4 4;
+}
+
+.column-header {
+    -fx-padding: 2 8 4 8;
+}
+
+.column-title {
+    -fx-font-weight: bold;
+    -fx-font-size: 14px;
+}
+
+.column-count {
+    -fx-background-color: rgba(0, 0, 0, 0.08);
+    -fx-background-radius: 9;
+    -fx-padding: 0 7 0 7;
+    -fx-text-fill: -muted;
+}
+
+.column-ai-review .column-title,
+.column-human-review .column-title,
+.column-done .column-title {
+    -fx-text-fill: -muted;
+}
+
+.column-scroll,
+.column-scroll > .viewport,
+.column-body {
+    -fx-background-color: transparent;
+    -fx-background-insets: 0;
+    -fx-padding: 0;
+}
+
+.column-body {
+    -fx-padding: 4 6 12 6;
+}
+
+.column-empty {
+    -fx-text-fill: -muted;
+    -fx-padding: 8;
+}
+
+/* ---- cards ---- */
+
+.ticket-card {
+    -fx-background-color: -card-bg;
+    -fx-background-radius: 6;
+    -fx-border-radius: 6;
+    -fx-border-color: #CDD3DB;
+    -fx-border-width: 1;
+    -fx-padding: 10;
+    -fx-effect: dropshadow(gaussian, rgba(0, 0, 0, 0.08), 4, 0, 0, 1);
+}
+
+.ticket-card:hover {
+    -fx-effect: dropshadow(gaussian, rgba(0, 0, 0, 0.18), 8, 0, 0, 2);
+}
+
+.card-meta {
+    -fx-text-fill: -muted;
+    -fx-font-size: 11px;
+}
+
+.card-title {
+    -fx-font-weight: bold;
+}
+
+.card-link {
+    -fx-padding: 0;
+    -fx-font-size: 11px;
+}
+
+.card-note {
+    -fx-text-fill: -muted;
+    -fx-font-size: 12px;
+}
+
+.card-question {
+    -fx-text-fill: #8A4B00;
+    -fx-font-style: italic;
+    -fx-font-size: 12px;
+}
+
+.button.accent {
+    -fx-base: -accent;
+    -fx-text-fill: white;
+    -fx-font-weight: bold;
+}
+
+.button.small {
+    -fx-font-size: 11px;
+    -fx-padding: 1 6 1 6;
+}
+
+/* ---- dialogs ---- */
+
+.section-title {
+    -fx-font-weight: bold;
+    -fx-font-size: 14px;
+    -fx-padding: 8 0 0 0;
+}
+
+.hint {
+    -fx-text-fill: -muted;
+    -fx-font-size: 11px;
+}
+
+.dialog-status {
+    -fx-text-fill: -muted;
+}
+
+.question-text .content {
+    -fx-background-color: #FFF8E6;
+}
+
+.log-text {
+    -fx-font-family: "Consolas", "Menlo", "DejaVu Sans Mono", monospace;
+    -fx-font-size: 12px;
+}
+
+.log-bar {
+    -fx-padding: 6 10 6 10;
+}
+
+.status-bar {
+    -fx-background-color: #DDE2E8;
+}
+
+.status-bar .label {
+    -fx-text-fill: -muted;
+    -fx-font-size: 11px;
+}
