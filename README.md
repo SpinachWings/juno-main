@@ -128,3 +128,14 @@ dev.juno.main
 ├── service              BoardService: orchestration, thread-safe, UI-agnostic
 └── ui                   Board, cards, dialogs
 ```
+
+## Look and feel
+
+Juno uses a dark theme (`src/main/resources/dev/juno/main/ui/juno.css`) with light-blue and magenta accents
+and square corners. It bundles two fonts under the SIL Open Font License; their licence texts are next to
+the font files in `ui/fonts/`:
+- [Share Tech Mono](https://fonts.google.com/specimen/Share+Tech+Mono): the interface font
+- [VT323](https://fonts.google.com/specimen/VT323): the title, column headers and section headings
+
+The palette is defined once at the top of the stylesheet.
+

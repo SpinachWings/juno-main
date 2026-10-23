@@ -352,6 +352,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         } else {
             TextInputDialog ask = new TextInputDialog(service.defaultLocation(ticket, kind));
             ask.initOwner(getDialogPane().getScene().getWindow());
+            Fx.inheritStyles(ask, getDialogPane().getScene().getWindow());
             ask.setTitle("Upload to " + kind.displayName());
             ask.setHeaderText("Create a new " + kind.displayName() + " issue from " + ticket.getId());
             ask.setContentText(kind.displayName() + " " + kind.locationHint() + ":");

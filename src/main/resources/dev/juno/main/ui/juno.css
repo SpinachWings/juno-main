@@ -1,25 +1,114 @@
-/* Juno board styling (applies on top of JavaFX's Modena theme). */
+/*
+ * Juno - dark retro theme.
+ * Near-black greys, light blue + magenta accents, square corners, quiet focus/selection states.
+ * Applied on top of JavaFX's Modena theme; author styles here take precedence over Modena.
+ */
 
 .root {
+    /* ---- palette ---- */
+    -bg: #0D0D10;
+    -panel: #141418;
+    -panel-2: #1B1B21;
+    -field: #101013;
+    -line: #2A2A33;
+    -line-strong: #3B3B48;
+    -text: #D6D9E0;
+    -text-bright: #F3F5F9;
+    -muted: #848A98;
+    -blue: #6FD6FF;
+    -blue-soft: rgba(111, 214, 255, 0.45);
+    -blue-faint: rgba(111, 214, 255, 0.12);
+    -magenta: #FF4FD8;
+    -magenta-soft: rgba(255, 79, 216, 0.45);
+    -magenta-faint: rgba(255, 79, 216, 0.12);
+    -card-bg: -panel;
+    -accent: -magenta;
+
+    /* ---- Modena overrides (drive text colours, selection and focus everywhere) ---- */
+    -fx-base: #1B1B21;
+    -fx-background: #0D0D10;
+    -fx-control-inner-background: #101013;
+    -fx-control-inner-background-alt: #101013;
+    -fx-accent: #6FD6FF;
+    -fx-default-button: #2A1A27;
+    -fx-focus-color: rgba(111, 214, 255, 0.45);
+    -fx-faint-focus-color: transparent;
+    -fx-selection-bar: rgba(111, 214, 255, 0.14);
+    -fx-selection-bar-non-focused: rgba(255, 255, 255, 0.06);
+    -fx-selection-bar-text: #F3F5F9;
+    -fx-text-base-color: #D6D9E0;
+    -fx-text-background-color: #D6D9E0;
+    -fx-text-inner-color: #D6D9E0;
+    -fx-mark-color: #6FD6FF;
+    -fx-mark-highlight-color: transparent;
+    -fx-box-border: #2A2A33;
+    -fx-text-box-border: #2A2A33;
+    -fx-outer-border: #2A2A33;
+    -fx-inner-border: transparent;
+    -fx-inner-border-horizontal: transparent;
+    -fx-inner-border-bottomup: transparent;
+    -fx-body-color: #1B1B21;
+    -fx-shadow-highlight-color: transparent;
+    -fx-hover-base: #23232B;
+    -fx-pressed-base: #101013;
+
+    -fx-background-color: -bg;
+    -fx-font-family: "Share Tech Mono", "Consolas", "DejaVu Sans Mono", monospace;
     -fx-font-size: 13px;
-    -board-bg: #EEF1F5;
-    -column-bg: #E2E6EC;
-    -card-bg: #FFFFFF;
-    -muted: #5F6773;
-    -accent: #3B6FD8;
 }
 
-.board-root,
-.board-scroll,
-.board-scroll > .viewport,
-.columns {
-    -fx-background-color: -board-bg;
+/* Straight edges everywhere. */
+* {
+    -fx-background-radius: 0;
+    -fx-border-radius: 0;
 }
+
+/* ---- text: retro display font for headings ---- */
 
 .app-title {
-    -fx-font-size: 16px;
-    -fx-font-weight: bold;
-    -fx-padding: 0 6 0 2;
+    -fx-font-family: "VT323", "Share Tech Mono", monospace;
+    -fx-font-size: 28px;
+    -fx-text-fill: -blue;
+    -fx-effect: dropshadow(gaussian, rgba(111, 214, 255, 0.45), 8, 0, 0, 0);
+}
+
+.app-brand {
+    -fx-padding: 0 8 0 2;
+}
+
+.label {
+    -fx-text-fill: -text;
+}
+
+.hint,
+.dialog-status,
+.column-empty,
+.card-meta,
+.card-note,
+.card-agent {
+    -fx-text-fill: -muted;
+}
+
+.section-title {
+    -fx-font-family: "VT323", "Share Tech Mono", monospace;
+    -fx-font-size: 20px;
+    -fx-text-fill: -magenta;
+    -fx-padding: 10 0 0 0;
+}
+
+/* ---- toolbar and status bar ---- */
+
+.tool-bar {
+    -fx-background-color: -panel;
+    -fx-background-insets: 0;
+    -fx-border-color: transparent transparent -line transparent;
+    -fx-border-width: 0 0 1 0;
+    -fx-padding: 6 10 6 10;
+    -fx-spacing: 8;
+}
+
+.tool-bar .separator .line {
+    -fx-border-color: -line;
 }
 
 .agents-idle {
@@ -28,55 +117,77 @@
 }
 
 .agents-busy {
-    -fx-text-fill: #1E8E3E;
-    -fx-font-weight: bold;
+    -fx-text-fill: -blue;
     -fx-padding: 0 10 0 0;
+    -fx-effect: dropshadow(gaussian, rgba(111, 214, 255, 0.5), 6, 0, 0, 0);
 }
 
-/* ---- columns ---- */
+.status-bar {
+    -fx-background-color: -panel;
+    -fx-border-color: -line transparent transparent transparent;
+    -fx-border-width: 1 0 0 0;
+}
+
+.status-bar .label {
+    -fx-text-fill: -muted;
+    -fx-font-size: 12px;
+}
+
+/* ---- board ---- */
+
+.board-root,
+.board-scroll,
+.board-scroll > .viewport,
+.columns {
+    -fx-background-color: -bg;
+}
 
 .column {
-    -fx-background-color: -column-bg;
-    -fx-background-radius: 10;
+    -fx-background-color: -panel;
+    -fx-border-color: -line;
+    -fx-border-width: 1;
     -fx-padding: 8 4 4 4;
 }
 
 .column-header {
-    -fx-padding: 2 8 4 8;
+    -fx-padding: 0 8 6 8;
+    -fx-border-color: transparent transparent -line transparent;
+    -fx-border-width: 0 0 1 0;
 }
 
 .column-title {
-    -fx-font-weight: bold;
-    -fx-font-size: 14px;
+    -fx-font-family: "VT323", "Share Tech Mono", monospace;
+    -fx-font-size: 22px;
+    -fx-text-fill: -blue;
 }
 
 .column-count {
-    -fx-background-color: rgba(0, 0, 0, 0.08);
-    -fx-background-radius: 9;
-    -fx-padding: 0 7 0 7;
-    -fx-text-fill: -muted;
+    -fx-text-fill: -magenta;
+    -fx-border-color: -magenta-soft;
+    -fx-border-width: 1;
+    -fx-padding: 0 6 0 6;
+    -fx-font-size: 12px;
 }
 
 .column-ai-review .column-title,
 .column-human-review .column-title,
 .column-done .column-title {
-    -fx-text-fill: -muted;
+    -fx-text-fill: derive(#6FD6FF, -35%);
 }
 
 .column-scroll,
-.column-scroll > .viewport,
-.column-body {
+.column-scroll > .viewport {
     -fx-background-color: transparent;
     -fx-background-insets: 0;
     -fx-padding: 0;
 }
 
 .column-body {
-    -fx-padding: 4 6 12 6;
+    -fx-background-color: transparent;
+    -fx-padding: 8 6 12 6;
 }
 
 .column-empty {
-    -fx-text-fill: -muted;
     -fx-padding: 8;
 }
 
@@ -84,25 +195,22 @@
 
 .ticket-card {
     -fx-background-color: -card-bg;
-    -fx-background-radius: 6;
-    -fx-border-radius: 6;
-    -fx-border-color: #CDD3DB;
+    -fx-border-color: -line;
     -fx-border-width: 1;
     -fx-padding: 10;
-    -fx-effect: dropshadow(gaussian, rgba(0, 0, 0, 0.08), 4, 0, 0, 1);
 }
 
 .ticket-card:hover {
-    -fx-effect: dropshadow(gaussian, rgba(0, 0, 0, 0.18), 8, 0, 0, 2);
+    -fx-effect: dropshadow(gaussian, rgba(111, 214, 255, 0.22), 10, 0, 0, 0);
 }
 
 .card-meta {
-    -fx-text-fill: -muted;
     -fx-font-size: 11px;
 }
 
 .card-title {
-    -fx-font-weight: bold;
+    -fx-text-fill: -text-bright;
+    -fx-font-size: 14px;
 }
 
 .card-link {
@@ -111,20 +219,72 @@
 }
 
 .card-note {
-    -fx-text-fill: -muted;
     -fx-font-size: 12px;
 }
 
 .card-question {
-    -fx-text-fill: #8A4B00;
-    -fx-font-style: italic;
+    -fx-text-fill: derive(#FF4FD8, 35%);
     -fx-font-size: 12px;
 }
 
-.button.accent {
-    -fx-base: -accent;
-    -fx-text-fill: white;
-    -fx-font-weight: bold;
+.card-agent {
+    -fx-font-size: 11px;
+}
+
+.card-agent-missing {
+    -fx-text-fill: #FF6B8B;
+    -fx-font-size: 11px;
+}
+
+/* ---- buttons ---- */
+
+.button,
+.menu-button,
+.toggle-button {
+    -fx-background-color: -panel-2;
+    -fx-background-insets: 0;
+    -fx-border-color: -line-strong;
+    -fx-border-width: 1;
+    -fx-text-fill: -text;
+    -fx-padding: 4 10 4 10;
+}
+
+.button:hover,
+.menu-button:hover,
+.toggle-button:hover {
+    -fx-border-color: -blue-soft;
+    -fx-text-fill: -text-bright;
+}
+
+.button:pressed,
+.menu-button:pressed,
+.menu-button:showing {
+    -fx-background-color: -field;
+    -fx-border-color: -blue;
+}
+
+.button:focused,
+.menu-button:focused,
+.toggle-button:focused {
+    -fx-border-color: -blue-soft;
+}
+
+.button:disabled,
+.menu-button:disabled {
+    -fx-opacity: 0.45;
+}
+
+.button.accent,
+.button:default {
+    -fx-background-color: -magenta-faint;
+    -fx-border-color: -magenta;
+    -fx-text-fill: derive(#FF4FD8, 45%);
+}
+
+.button.accent:hover,
+.button:default:hover {
+    -fx-background-color: rgba(255, 79, 216, 0.22);
+    -fx-text-fill: -text-bright;
 }
 
 .button.small {
@@ -132,55 +292,378 @@
     -fx-padding: 1 6 1 6;
 }
 
-/* ---- dialogs ---- */
-
-.section-title {
-    -fx-font-weight: bold;
-    -fx-font-size: 14px;
-    -fx-padding: 8 0 0 0;
+.menu-button > .arrow-button > .arrow,
+.combo-box-base > .arrow-button > .arrow {
+    -fx-background-color: -muted;
 }
 
-.hint {
-    -fx-text-fill: -muted;
-    -fx-font-size: 11px;
+/* ---- text inputs: flat, thin border, gentle focus ---- */
+
+.text-field,
+.password-field {
+    -fx-background-color: -field;
+    -fx-background-insets: 0;
+    -fx-border-color: -line;
+    -fx-border-width: 1;
+    -fx-text-fill: -text;
+    -fx-prompt-text-fill: derive(#848A98, -20%);
+    -fx-highlight-fill: rgba(255, 79, 216, 0.30);
+    -fx-highlight-text-fill: -text-bright;
 }
 
-.dialog-status {
-    -fx-text-fill: -muted;
+.text-field:focused,
+.password-field:focused {
+    -fx-background-color: -field;
+    -fx-border-color: -blue-soft;
 }
 
-.question-text .content {
-    -fx-background-color: #FFF8E6;
+.text-area {
+    -fx-background-color: -field;
+    -fx-background-insets: 0;
+    -fx-border-color: -line;
+    -fx-border-width: 1;
+    -fx-text-fill: -text;
+    -fx-prompt-text-fill: derive(#848A98, -20%);
+    -fx-highlight-fill: rgba(255, 79, 216, 0.30);
+    -fx-highlight-text-fill: -text-bright;
 }
 
-.log-text {
-    -fx-font-family: "Consolas", "Menlo", "DejaVu Sans Mono", monospace;
-    -fx-font-size: 12px;
+.text-area:focused {
+    -fx-background-color: -field;
+    -fx-border-color: -blue-soft;
 }
 
-.log-bar {
-    -fx-padding: 6 10 6 10;
+.text-area .content,
+.text-area .scroll-pane,
+.text-area .scroll-pane > .viewport {
+    -fx-background-color: -field;
+    -fx-background-insets: 0;
 }
 
-.status-bar {
-    -fx-background-color: #DDE2E8;
+.text-input:disabled {
+    -fx-opacity: 0.5;
 }
 
-.status-bar .label {
-    -fx-text-fill: -muted;
-    -fx-font-size: 11px;
+/* ---- combo boxes, colour picker, spinner ---- */
+
+.combo-box-base {
+    -fx-background-color: -field;
+    -fx-background-insets: 0;
+    -fx-border-color: -line;
+    -fx-border-width: 1;
 }
 
-.card-agent {
-    -fx-text-fill: -muted;
-    -fx-font-size: 11px;
+.combo-box-base:hover {
+    -fx-border-color: -line-strong;
 }
 
-.card-agent-missing {
-    -fx-text-fill: #B3261E;
-    -fx-font-size: 11px;
+.combo-box-base:focused,
+.combo-box-base:showing {
+    -fx-border-color: -blue-soft;
+}
+
+.combo-box-base > .arrow-button {
+    -fx-background-color: transparent;
+}
+
+.combo-box > .list-cell {
+    -fx-text-fill: -text;
+    -fx-background-color: transparent;
+}
+
+.combo-box-base > .text-field,
+.combo-box-base > .text-field:focused {
+    -fx-border-color: transparent;
+    -fx-border-width: 0;
+}
+
+.combo-box-popup > .list-view {
+    -fx-background-color: -panel-2;
+    -fx-border-color: -line-strong;
+    -fx-effect: dropshadow(gaussian, rgba(0, 0, 0, 0.6), 10, 0, 0, 3);
+}
+
+.spinner {
+    -fx-background-color: -field;
+    -fx-border-color: -line;
+    -fx-border-width: 1;
+}
+
+.spinner > .text-field,
+.spinner > .text-field:focused {
+    -fx-border-color: transparent;
+    -fx-border-width: 0;
+}
+
+.spinner > .increment-arrow-button,
+.spinner > .decrement-arrow-button {
+    -fx-background-color: -panel-2;
+    -fx-background-insets: 0;
+}
+
+.spinner > .increment-arrow-button > .increment-arrow,
+.spinner > .decrement-arrow-button > .decrement-arrow {
+    -fx-background-color: -muted;
+}
+
+/* ---- checkboxes ---- */
+
+.check-box > .box {
+    -fx-background-color: -field;
+    -fx-background-insets: 0;
+    -fx-border-color: -line-strong;
+    -fx-border-width: 1;
+}
+
+.check-box:focused > .box {
+    -fx-border-color: -blue-soft;
+}
+
+.check-box:selected > .box > .mark {
+    -fx-background-color: -blue;
+}
+
+/* ---- lists and trees: quiet selection ---- */
+
+.list-view,
+.tree-view {
+    -fx-background-color: -field;
+    -fx-background-insets: 0;
+    -fx-border-color: -line;
+    -fx-border-width: 1;
+}
+
+.list-view:focused,
+.tree-view:focused {
+    -fx-border-color: -line-strong;
+}
+
+.list-cell,
+.tree-cell {
+    -fx-background-color: transparent;
+    -fx-text-fill: -text;
+    -fx-padding: 4 8 4 8;
+}
+
+.list-cell:filled:hover,
+.tree-cell:filled:hover {
+    -fx-background-color: rgba(255, 255, 255, 0.04);
+}
+
+/* Selected row: faint blue wash with a thin light-blue marker on the left (no layout shift). */
+.list-cell:filled:selected,
+.tree-cell:filled:selected {
+    -fx-background-color: -blue, -field, -blue-faint;
+    -fx-background-insets: 0, 0 0 0 2, 0 0 0 2;
+    -fx-text-fill: -text-bright;
+}
+
+.tree-cell > .tree-disclosure-node > .arrow {
+    -fx-background-color: -muted;
 }
 
 .tree-org {
-    -fx-font-weight: bold;
+    -fx-text-fill: -blue;
+}
+
+/* ---- scroll panes and scroll bars ---- */
+
+.scroll-pane,
+.scroll-pane > .viewport {
+    -fx-background-color: transparent;
+    -fx-background-insets: 0;
+}
+
+.scroll-pane > .corner {
+    -fx-background-color: -bg;
+}
+
+.scroll-bar {
+    -fx-background-color: -bg;
+    -fx-background-insets: 0;
+    -fx-padding: 0;
+}
+
+.scroll-bar > .thumb {
+    -fx-background-color: -line-strong;
+    -fx-background-insets: 2;
+}
+
+.scroll-bar > .thumb:hover,
+.scroll-bar > .thumb:pressed {
+    -fx-background-color: -blue-soft;
+}
+
+.scroll-bar > .increment-button,
+.scroll-bar > .decrement-button {
+    -fx-background-color: transparent;
+    -fx-padding: 2;
+}
+
+.scroll-bar > .increment-button > .increment-arrow,
+.scroll-bar > .decrement-button > .decrement-arrow {
+    -fx-background-color: -line-strong;
+}
+
+/* ---- tabs ---- */
+
+.tab-pane > .tab-header-area > .tab-header-background {
+    -fx-background-color: -panel;
+    -fx-border-color: transparent transparent -line transparent;
+    -fx-border-width: 0 0 1 0;
+}
+
+.tab-pane > .tab-header-area > .headers-region > .tab {
+    -fx-background-color: transparent;
+    -fx-background-insets: 0;
+    -fx-border-color: transparent;
+    -fx-border-width: 0 0 2 0;
+    -fx-padding: 4 12 4 12;
+}
+
+.tab-pane > .tab-header-area > .headers-region > .tab:hover {
+    -fx-background-color: rgba(255, 255, 255, 0.04);
+}
+
+.tab-pane > .tab-header-area > .headers-region > .tab:selected {
+    -fx-border-color: transparent transparent -magenta transparent;
+}
+
+.tab-pane > .tab-header-area > .headers-region > .tab:selected .focus-indicator {
+    -fx-border-color: transparent;
+}
+
+.tab .tab-label {
+    -fx-text-fill: -muted;
+}
+
+.tab:selected .tab-label {
+    -fx-text-fill: -text-bright;
+}
+
+/* ---- dialogs, menus, tooltips ---- */
+
+.dialog-pane {
+    -fx-background-color: -panel;
+}
+
+.dialog-pane > .header-panel {
+    -fx-background-color: -bg;
+    -fx-border-color: transparent transparent -line transparent;
+    -fx-border-width: 0 0 1 0;
+}
+
+.dialog-pane > .header-panel .label {
+    -fx-font-family: "VT323", "Share Tech Mono", monospace;
+    -fx-font-size: 22px;
+    -fx-text-fill: -blue;
+}
+
+.dialog-pane > .content.label {
+    -fx-text-fill: -text;
+}
+
+.dialog-pane > .button-bar > .container {
+    -fx-background-color: -panel;
+}
+
+.context-menu {
+    -fx-background-color: -panel-2;
+    -fx-background-insets: 0;
+    -fx-border-color: -line-strong;
+    -fx-border-width: 1;
+    -fx-effect: dropshadow(gaussian, rgba(0, 0, 0, 0.6), 10, 0, 0, 3);
+}
+
+.menu-item {
+    -fx-background-color: transparent;
+}
+
+.menu-item .label {
+    -fx-text-fill: -text;
+}
+
+.menu-item:focused {
+    -fx-background-color: -blue-faint;
+}
+
+.menu-item:focused .label {
+    -fx-text-fill: -text-bright;
+}
+
+.menu-item:disabled .label {
+    -fx-text-fill: derive(#848A98, -30%);
+}
+
+.menu > .right-container > .arrow {
+    -fx-background-color: -muted;
+}
+
+.separator-menu-item > .line {
+    -fx-border-color: -line;
+}
+
+.tooltip {
+    -fx-background-color: -panel-2;
+    -fx-background-insets: 0;
+    -fx-border-color: -magenta-soft;
+    -fx-border-width: 1;
+    -fx-text-fill: -text;
+    -fx-font-family: "Share Tech Mono", "Consolas", monospace;
+    -fx-font-size: 12px;
+    -fx-effect: none;
+}
+
+/* ---- misc controls ---- */
+
+.hyperlink {
+    -fx-text-fill: -blue;
+    -fx-border-color: transparent;
+    -fx-underline: false;
+}
+
+.hyperlink:hover {
+    -fx-underline: true;
+}
+
+.hyperlink:visited {
+    -fx-text-fill: -blue;
+}
+
+.hyperlink:focused {
+    -fx-border-color: transparent;
+}
+
+.progress-indicator {
+    -fx-progress-color: -magenta;
+}
+
+.color-picker > .color-picker-label {
+    -fx-text-fill: -text;
+}
+
+.separator .line {
+    -fx-border-color: -line;
+}
+
+/* ---- log window ---- */
+
+.log-text {
+    -fx-font-family: "Share Tech Mono", "Consolas", "DejaVu Sans Mono", monospace;
+    -fx-font-size: 13px;
+}
+
+.log-text .content {
+    -fx-background-color: #08080A;
+}
+
+.log-bar {
+    -fx-background-color: -panel;
+    -fx-padding: 6 10 6 10;
+    -fx-border-color: -line transparent transparent transparent;
+    -fx-border-width: 1 0 0 0;
+}
+
+.question-text .content {
+    -fx-background-color: #160E15;
 }

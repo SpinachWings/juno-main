@@ -53,6 +53,7 @@ public final class Fx {
     public static void error(Window owner, String header, String message) {
         Alert alert = new Alert(Alert.AlertType.ERROR);
         alert.initOwner(owner);
+        inheritStyles(alert, owner);
         alert.setTitle("Juno");
         alert.setHeaderText(header);
         TextArea text = new TextArea(message);
@@ -66,6 +67,7 @@ public final class Fx {
     public static void info(Window owner, String header, String message) {
         Alert alert = new Alert(Alert.AlertType.INFORMATION, message, ButtonType.OK);
         alert.initOwner(owner);
+        inheritStyles(alert, owner);
         alert.setTitle("Juno");
         alert.setHeaderText(header);
         alert.showAndWait();
@@ -74,6 +76,7 @@ public final class Fx {
     public static boolean confirm(Window owner, String header, String message) {
         Alert alert = new Alert(Alert.AlertType.CONFIRMATION, message, ButtonType.OK, ButtonType.CANCEL);
         alert.initOwner(owner);
+        inheritStyles(alert, owner);
         alert.setTitle("Juno");
         alert.setHeaderText(header);
         return alert.showAndWait().filter(b -> b == ButtonType.OK).isPresent();

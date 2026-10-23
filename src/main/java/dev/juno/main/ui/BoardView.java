@@ -103,8 +103,11 @@ public final class BoardView {
         Pane spacer = new Pane();
         HBox.setHgrow(spacer, Priority.ALWAYS);
 
-        Label title = new Label("Juno");
-        title.getStyleClass().add("app-title");
+        Label titleText = new Label("Juno");
+        titleText.getStyleClass().add("app-title");
+        HBox title = new HBox(8, SpaceIcon.create(), titleText);
+        title.setAlignment(Pos.CENTER_LEFT);
+        title.getStyleClass().add("app-brand");
 
         return new ToolBar(title, new Separator(), newTicket, importIssue, new Separator(),
                 new Label("Organisation:"), orgFilter, new Label("Project:"), projectFilter,
@@ -116,7 +119,7 @@ public final class BoardView {
         columns.setPadding(new Insets(12));
         columns.getStyleClass().add("columns");
         for (TicketStatus status : TicketStatus.values()) {
-            Label name = new Label(status.label());
+            Label name = new Label(status.label().toUpperCase(java.util.Locale.ROOT));
             name.getStyleClass().add("column-title");
             Label count = new Label("0");
             count.getStyleClass().add("column-count");

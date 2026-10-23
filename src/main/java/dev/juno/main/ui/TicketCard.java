@@ -59,9 +59,10 @@ final class TicketCard {
         Optional<Project> project = service.projectOf(ticket);
         project.ifPresent(p -> {
             Color c = Fx.parseColor(p.getColor(), Color.GRAY);
-            card.setStyle("-fx-background-color: -card-bg, " + Fx.rgba(c, 0.16) + ";"
-                    + "-fx-border-color: " + Fx.toHex(c) + ";"
-                    + "-fx-border-width: 0 0 0 5;");
+            // Project colour: a solid stripe on the left and a faint tint over the dark card.
+            card.setStyle("-fx-background-color: -card-bg, " + Fx.rgba(c, 0.10) + ";"
+                    + "-fx-border-color: -line -line -line " + Fx.toHex(c) + ";"
+                    + "-fx-border-width: 1 1 1 4;");
         });
 
         String org = service.organisationOf(ticket).map(Organisation::getName).orElse(null);
