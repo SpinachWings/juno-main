@@ -370,6 +370,18 @@ public final class BoardView {
             }
 
             @Override
+            public void retryPullRequest(Ticket t, Window owner) {
+                status("Opening pull request for " + t.getId() + "…");
+                Fx.async(() -> {
+                    service.openPullRequest(t.getId());
+                    return null;
+                }, ok -> status(t.getPullRequest() != null
+                        ? "Opened " + t.getPullRequest().display() + " for " + t.getId()
+                        : "Pull request for " + t.getId() + " not opened; see the card"),
+                        err -> Fx.error(owner, "Could not open the pull request", err));
+            }
+
+            @Override
             public void delete(Ticket t, Window owner) {
                 if (Fx.confirm(owner, "Delete " + t.getId() + "?",
                         "This removes the ticket from Juno only; linked GitLab/GitHub issues are not touched.")) {

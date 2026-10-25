@@ -7,6 +7,7 @@ import dev.juno.main.mcp.McpClient;
 import dev.juno.main.mcp.McpException;
 import dev.juno.main.model.JunoSettings;
 import dev.juno.main.model.Organisation;
+import dev.juno.main.model.PullRequestRef;
 import dev.juno.main.model.TrackerKind;
 import dev.juno.main.model.TrackerSettings;
 
@@ -74,6 +75,21 @@ public final class IssueTrackerService implements AutoCloseable {
         args.put("title", title);
         args.put("body", body);
         return IssueData.fromJson(client(org, kind).callTool("update_issue", args));
+    }
+
+    /**
+     * Opens a pull request (GitHub) or merge request (GitLab) from {@code head} into {@code base}, or returns
+     * the open one that already exists for that branch.
+     */
+    public PullRequestRef createPullRequest(Organisation org, TrackerKind kind, String location, String head,
+                                            String base, String title, String body) throws McpException {
+        ObjectNode args = args(kind, location);
+        args.put(kind.headArgument(), head);
+        args.put(kind.baseArgument(), base);
+        args.put("title", title);
+        args.put("body", body);
+        JsonNode pr = client(org, kind).callTool(kind.pullRequestTool(), args);
+        return new PullRequestRef(kind, location.trim(), pr.path("number").asLong(), pr.path("url").asText(""));
     }
 
     /** Starts (if needed) the organisation's server and returns its tool names; used by Settings' "Test". */

@@ -15,6 +15,21 @@ public final class Ticket {
     /** Agent profile override for this ticket; null = inherit from the project, then the organisation. */
     private String agentProfileId;
 
+    /** Extra instructions from the user, given to the agent when it first picks up the ticket. */
+    private String initialInstructions = "";
+    /** Branch the work branches off and the pull request targets. */
+    private String baseBranch = "main";
+    /** Branch the agent works on; blank = generated from the ticket id and title on Start. */
+    private String branchName = "";
+    /** Git worktree the agent works in (set once work starts; the branch is fixed from then on). */
+    private String worktreePath;
+    /** Commit the branch was created from (e.g. {@code origin/main}), used to check for new commits. */
+    private String baseRef;
+    /** The pull/merge request opened when the agent finished. */
+    private PullRequestRef pullRequest;
+    /** Why the pull request could not be opened, if it failed. */
+    private String pullRequestError;
+
     /** Claude Code session id of the most recent agent run, used to resume after a decision. */
     private String agentSessionId;
     /** The agent's question while the ticket is awaiting a decision. */
@@ -92,6 +107,67 @@ public final class Ticket {
 
     public void setAgentProfileId(String agentProfileId) {
         this.agentProfileId = agentProfileId;
+    }
+
+    public String getInitialInstructions() {
+        return initialInstructions == null ? "" : initialInstructions;
+    }
+
+    public void setInitialInstructions(String initialInstructions) {
+        this.initialInstructions = initialInstructions == null ? "" : initialInstructions;
+    }
+
+    public String getBaseBranch() {
+        return baseBranch == null || baseBranch.isBlank() ? "main" : baseBranch;
+    }
+
+    public void setBaseBranch(String baseBranch) {
+        this.baseBranch = baseBranch == null || baseBranch.isBlank() ? "main" : baseBranch.strip();
+    }
+
+    public String getBranchName() {
+        return branchName == null ? "" : branchName;
+    }
+
+    public void setBranchName(String branchName) {
+        this.branchName = branchName == null ? "" : branchName.strip();
+    }
+
+    public String getWorktreePath() {
+        return worktreePath;
+    }
+
+    public void setWorktreePath(String worktreePath) {
+        this.worktreePath = worktreePath;
+    }
+
+    public String getBaseRef() {
+        return baseRef;
+    }
+
+    public void setBaseRef(String baseRef) {
+        this.baseRef = baseRef;
+    }
+
+    public PullRequestRef getPullRequest() {
+        return pullRequest;
+    }
+
+    public void setPullRequest(PullRequestRef pullRequest) {
+        this.pullRequest = pullRequest;
+    }
+
+    public String getPullRequestError() {
+        return pullRequestError;
+    }
+
+    public void setPullRequestError(String pullRequestError) {
+        this.pullRequestError = pullRequestError;
+    }
+
+    /** Whether work has started, which fixes the base and branch names. */
+    public boolean isBranchLocked() {
+        return worktreePath != null;
     }
 
     public String getAgentSessionId() {

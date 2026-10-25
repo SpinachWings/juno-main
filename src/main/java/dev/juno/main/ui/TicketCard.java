@@ -4,6 +4,7 @@ import dev.juno.main.model.AgentAssignment;
 import dev.juno.main.model.ExternalRef;
 import dev.juno.main.model.Organisation;
 import dev.juno.main.model.Project;
+import dev.juno.main.model.PullRequestRef;
 import dev.juno.main.model.Ticket;
 import dev.juno.main.model.TicketStatus;
 import dev.juno.main.model.TrackerKind;
@@ -46,6 +47,8 @@ final class TicketCard {
         void move(Ticket t, TicketStatus target, Window owner);
 
         void delete(Ticket t, Window owner);
+
+        void retryPullRequest(Ticket t, Window owner);
     }
 
     private TicketCard() {
@@ -120,9 +123,46 @@ final class TicketCard {
                     card.getChildren().add(excerpt(ticket.getLastSummary(), "card-note"));
                 }
             }
+            case PENDING -> {
+                if (service.isPreparing(ticket.getId())) {
+                    ProgressIndicator spinner = new ProgressIndicator(-1);
+                    spinner.setPrefSize(14, 14);
+                    Label label = new Label("Preparing branch " + ticket.getBranchName() + "…");
+                    label.getStyleClass().add("card-note");
+                    HBox row = new HBox(6, spinner, label);
+                    row.setAlignment(Pos.CENTER_LEFT);
+                    card.getChildren().add(row);
+                }
+            }
             default -> {
                 // no extra content
             }
+        }
+
+        if (ticket.isBranchLocked()) {
+            Label branch = new Label("Branch: " + ticket.getBranchName() + " -> " + ticket.getBaseBranch());
+            branch.getStyleClass().add("card-agent");
+            branch.setWrapText(true);
+            card.getChildren().add(branch);
+        }
+        boolean openingPr = service.isOpeningPullRequest(ticket.getId());
+        PullRequestRef pr = ticket.getPullRequest();
+        if (openingPr) {
+            ProgressIndicator spinner = new ProgressIndicator(-1);
+            spinner.setPrefSize(14, 14);
+            Label label = new Label("Pushing branch and opening pull request…");
+            label.getStyleClass().add("card-note");
+            HBox row = new HBox(6, spinner, label);
+            row.setAlignment(Pos.CENTER_LEFT);
+            card.getChildren().add(row);
+        } else if (pr != null) {
+            Hyperlink prLink = new Hyperlink(pr.display() + " " + pr.location());
+            prLink.getStyleClass().add("card-link");
+            prLink.setTooltip(new Tooltip(pr.url()));
+            prLink.setOnAction(e -> hostServices.showDocument(pr.url()));
+            card.getChildren().add(prLink);
+        } else if (ticket.getPullRequestError() != null) {
+            card.getChildren().add(excerpt("PR not opened: " + ticket.getPullRequestError(), "card-agent-missing"));
         }
 
         HBox buttons = new HBox(6);
@@ -131,9 +171,10 @@ final class TicketCard {
                 b -> actions.details(ticket, b.getScene().getWindow()));
         switch (ticket.getStatus()) {
             case PENDING -> {
-                Button start = button("Start", "Hand this ticket to an agent",
+                Button start = button("Start", "Create the ticket's branch and hand the ticket to an agent",
                         b -> actions.start(ticket, b.getScene().getWindow()));
                 start.getStyleClass().add("accent");
+                start.setDisable(service.isPreparing(ticket.getId()));
                 buttons.getChildren().addAll(start, details);
             }
             case WORKING -> {
@@ -148,7 +189,16 @@ final class TicketCard {
                 respond.getStyleClass().add("accent");
                 buttons.getChildren().addAll(respond, logButton(ticket, actions), details);
             }
-            default -> buttons.getChildren().addAll(logButton(ticket, actions), details);
+            default -> {
+                if (ticket.getPullRequestError() != null && !openingPr && ticket.isBranchLocked()
+                        && ticket.getStatus() == TicketStatus.AI_REVIEW) {
+                    Button retry = button("Retry PR", "Commit, push the branch and open the pull request again",
+                            b -> actions.retryPullRequest(ticket, b.getScene().getWindow()));
+                    retry.getStyleClass().add("accent");
+                    buttons.getChildren().add(retry);
+                }
+                buttons.getChildren().addAll(logButton(ticket, actions), details);
+            }
         }
         card.getChildren().add(buttons);
 

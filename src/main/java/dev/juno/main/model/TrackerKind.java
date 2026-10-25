@@ -28,6 +28,25 @@ public enum TrackerKind {
         return shortName;
     }
 
+    /** MCP tool that opens a pull request (GitHub) / merge request (GitLab). */
+    public String pullRequestTool() {
+        return this == GITLAB ? "create_merge_request" : "create_pull_request";
+    }
+
+    /** Tool argument names for the source and target branches. */
+    public String headArgument() {
+        return this == GITLAB ? "source_branch" : "head";
+    }
+
+    public String baseArgument() {
+        return this == GITLAB ? "target_branch" : "base";
+    }
+
+    /** "pull request" or "merge request". */
+    public String pullRequestNoun() {
+        return this == GITLAB ? "merge request" : "pull request";
+    }
+
     /** Human description of what a location looks like for this tracker. */
     public String locationHint() {
         return this == GITLAB ? "group/project" : "owner/repo";

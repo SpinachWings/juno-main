@@ -1,10 +1,12 @@
 package dev.juno.main.ui;
 
 import dev.juno.main.model.AgentProfile;
+import dev.juno.main.git.GitWorkspace;
 import dev.juno.main.model.ExternalRef;
 import dev.juno.main.model.JunoSettings;
 import dev.juno.main.model.Organisation;
 import dev.juno.main.model.Project;
+import dev.juno.main.model.PullRequestRef;
 import dev.juno.main.model.Ticket;
 import dev.juno.main.model.TrackerKind;
 import dev.juno.main.service.BoardService;
@@ -59,6 +61,11 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
 
     private final TextField title = new TextField();
     private final TextArea description = new TextArea();
+    private final TextArea instructions = new TextArea();
+    private final TextField baseBranch = new TextField();
+    private final TextField branchName = new TextField();
+    private final Label branchHint = new Label();
+    private final HBox pullRequestRow = new HBox(6);
     private final ComboBox<Organisation> organisation = new ComboBox<>();
     private final ComboBox<Item> project = new ComboBox<>();
     private final ComboBox<Item> agent = new ComboBox<>();
@@ -86,14 +93,18 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         getDialogPane().getButtonTypes().addAll(save, ButtonType.CANCEL);
         getDialogPane().getStyleClass().add("ticket-dialog");
         getDialogPane().setContent(buildContent());
-        getDialogPane().setPrefSize(960, 640);
+        getDialogPane().setPrefSize(980, 800);
 
         loadFromTicket();
 
         Button saveButton = (Button) getDialogPane().lookupButton(save);
         saveButton.addEventFilter(javafx.event.ActionEvent.ACTION, e -> {
+            String branchProblem = branchProblem();
             if (title.getText().isBlank()) {
                 status.setText("A title is required.");
+                e.consume();
+            } else if (branchProblem != null) {
+                status.setText(branchProblem);
                 e.consume();
             } else if (!confirmProjectChange()) {
                 e.consume();
@@ -116,7 +127,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         title.setPromptText("Short summary of the work");
         description.setPromptText("Full description, acceptance criteria, notes for the agent…");
         description.setWrapText(true);
-        description.setPrefRowCount(20);
+        description.setPrefRowCount(14);
 
         organisation.getItems().setAll(service.settings().getOrganisations());
         organisation.setMaxWidth(Double.MAX_VALUE);
@@ -148,10 +159,32 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         form.addRow(1, new Label("Organisation"), organisation);
         form.addRow(2, new Label("Project"), project);
         form.addRow(3, new Label("Agent"), agentBox);
+
+        baseBranch.setPromptText("main");
+        baseBranch.setPrefColumnCount(14);
+        branchName.setPromptText(GitWorkspace.suggestBranchName(ticket.getId(), ticket.getTitle()));
+        title.textProperty().addListener((obs, old, value) ->
+                branchName.setPromptText(GitWorkspace.suggestBranchName(ticket.getId(), value)));
+        HBox.setHgrow(branchName, Priority.ALWAYS);
+        Label branchLabel = new Label("Branch name");
+        HBox branchRow = new HBox(8, baseBranch, branchLabel, branchName);
+        branchRow.setAlignment(Pos.CENTER_LEFT);
+        branchHint.getStyleClass().add("hint");
+        branchHint.setWrapText(true);
+        form.addRow(4, new Label("Base branch"), new VBox(2, branchRow, branchHint));
+
         Label descLabel = new Label("Description");
         GridPane.setValignment(descLabel, javafx.geometry.VPos.TOP);
-        form.addRow(4, descLabel, description);
+        form.addRow(5, descLabel, description);
         GridPane.setVgrow(description, Priority.ALWAYS);
+
+        instructions.setPromptText("Instructions for the agent when it picks up this ticket (not synced to "
+                + "GitLab/GitHub), e.g. approach, files to look at, things to avoid…");
+        instructions.setWrapText(true);
+        instructions.setPrefRowCount(5);
+        Label instructionsLabel = new Label("Initial\ninstructions");
+        GridPane.setValignment(instructionsLabel, javafx.geometry.VPos.TOP);
+        form.addRow(6, instructionsLabel, instructions);
 
         VBox links = new VBox(4);
         for (TrackerKind kind : TrackerKind.values()) {
@@ -160,7 +193,9 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
             linkRows.put(kind, row);
             links.getChildren().add(row);
         }
-        form.addRow(5, new Label("Linked issues"), links);
+        pullRequestRow.setAlignment(Pos.CENTER_LEFT);
+        links.getChildren().add(pullRequestRow);
+        form.addRow(7, new Label("Linked issues"), links);
 
         // The sync "menu".
         Label menuTitle = new Label("Sync");
@@ -212,6 +247,17 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         try {
             title.setText(ticket.getTitle());
             description.setText(ticket.getDescription());
+            instructions.setText(ticket.getInitialInstructions());
+            baseBranch.setText(ticket.getBaseBranch());
+            branchName.setText(ticket.getBranchName());
+            boolean locked = ticket.isBranchLocked();
+            baseBranch.setDisable(locked);
+            branchName.setDisable(locked);
+            branchHint.setText(locked
+                    ? "Fixed: work has started on this branch (worktree " + ticket.getWorktreePath() + ")."
+                    : "The agent works on a new branch created from the base branch; when it finishes, Juno "
+                            + "opens a pull request into the base branch. Leave the name blank to use the "
+                            + "suggestion.");
             List<Organisation> orgs = service.settings().getOrganisations();
             Organisation org = service.organisationOf(ticket).orElse(orgs.isEmpty() ? null : orgs.getFirst());
             organisation.setValue(org);
@@ -285,6 +331,25 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
     }
 
     private void refreshLinks() {
+        pullRequestRow.getChildren().clear();
+        Label prName = new Label("Pull request:");
+        prName.setMinWidth(55);
+        pullRequestRow.getChildren().add(prName);
+        PullRequestRef pr = ticket.getPullRequest();
+        if (pr != null) {
+            Hyperlink link = new Hyperlink(pr.display() + " (" + pr.location() + ")");
+            link.setOnAction(e -> hostServices.showDocument(pr.url()));
+            pullRequestRow.getChildren().add(link);
+        } else if (ticket.getPullRequestError() != null) {
+            Label error = new Label(ticket.getPullRequestError());
+            error.setWrapText(true);
+            error.getStyleClass().add("card-agent-missing");
+            pullRequestRow.getChildren().add(error);
+        } else {
+            Label none = new Label(ticket.isBranchLocked() ? "opened when the agent finishes" : "none yet");
+            none.getStyleClass().add("hint");
+            pullRequestRow.getChildren().add(none);
+        }
         for (TrackerKind kind : TrackerKind.values()) {
             HBox row = linkRows.get(kind);
             row.getChildren().clear();
@@ -314,6 +379,26 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         }
     }
 
+    /** Quick sanity check of the branch fields (git validates them fully when work starts). */
+    private String branchProblem() {
+        if (ticket.isBranchLocked()) {
+            return null;
+        }
+        for (String[] field : new String[][] {{"Base branch", baseBranch.getText()},
+                {"Branch name", branchName.getText()}}) {
+            String v = field[1] == null ? "" : field[1].strip();
+            if (!v.isEmpty() && (v.matches(".*[\\s~^:?*\\[\\\\].*") || v.contains("..") || v.startsWith("-")
+                    || v.startsWith("/") || v.endsWith("/") || v.endsWith(".lock") || v.endsWith("."))) {
+                return field[0] + " '" + v + "' is not a valid git branch name.";
+            }
+        }
+        String base = baseBranch.getText() == null || baseBranch.getText().isBlank() ? "main" : baseBranch.getText().strip();
+        if (base.equals(branchName.getText() == null ? "" : branchName.getText().strip())) {
+            return "The branch name must differ from the base branch.";
+        }
+        return null;
+    }
+
     /** Copies the form into the ticket and persists it (call {@link #confirmProjectChange()} first). */
     private void applyEdits() {
         String projectId = selectedProjectId();
@@ -322,6 +407,11 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         }
         ticket.setTitle(title.getText().strip());
         ticket.setDescription(description.getText());
+        ticket.setInitialInstructions(instructions.getText());
+        if (!ticket.isBranchLocked()) {
+            ticket.setBaseBranch(baseBranch.getText());
+            ticket.setBranchName(branchName.getText());
+        }
         ticket.setAgentProfileId(selectedAgentId());
         service.saveTicket(ticket);
         refreshLinks();

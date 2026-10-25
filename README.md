@@ -85,6 +85,44 @@ The original file is kept as `settings.pre-orgs.json`.
 5. **Start** runs the resolved agent with `claude -p --output-format stream-json …` in the project
    directory, using the ticket as the prompt. **Log** shows live activity.
 
+### Ticket fields
+
+| Field | Synced with GitLab/GitHub? | Used for |
+| --- | --- | --- |
+| Title | yes | Issue title; PR title (`JUNO-12: <title>`) |
+| Description | yes, both ways | Upload replaces the issue description; import replaces the ticket's description. Also part of the agent prompt. |
+| Initial instructions | no | Extra guidance given to the agent when it first picks up the ticket |
+| Base branch | no | Branch the work starts from and the pull request targets (default `main`) |
+| Branch name | no | Branch the agent works on (blank = `juno/<ticket>-<title>`) |
+
+Base branch and branch name are fixed once work has started.
+
+### Branches and pull requests
+
+1. **Start**:
+   - Juno fetches `origin/<base>` and creates the ticket's branch from it.
+   - The branch gets its own git worktree, in `~/.juno/worktrees/<ticket>`, so several agents can work on
+     one repository at once and your own checkout is never touched.
+   - If the branch already exists, it is checked out instead.
+   - The agent runs in that worktree. Its prompt tells it to commit to the branch and not to push or switch
+     branches.
+2. **When the agent finishes**:
+   - Juno commits anything it left uncommitted and checks the branch has commits beyond the base.
+   - It runs `git push -u origin <branch>` with your own git credentials, and never prompts for them.
+   - It then opens a pull request (GitHub) or merge request (GitLab) into the base branch through the
+     organisation's MCP server. The agent's summary becomes the description, plus `Closes #n` when the
+     linked issue is in the same repository.
+   - The PR goes to the tracker the ticket is linked to if possible, otherwise GitHub, then GitLab, using
+     the project's configured repo.
+3. The card shows the PR link. If something failed (no commits, push rejected, repo not configured), the
+   card shows why and offers **Retry PR**. Retrying never opens a duplicate PR.
+
+Tips:
+- Add `Bash(git add:*) Bash(git commit:*) Bash(git status) Bash(git diff:*)` to the agent's allowed tools,
+  so it can commit with meaningful messages. Otherwise Juno makes a single commit at the end.
+- Worktrees stay in place after the PR is opened, so a resumed session or a retry reuses them. Remove one
+  with `git worktree remove <path>` once the PR is merged.
+
 ### How agents ask for decisions
 
 The prompt tells the agent to end its final reply with
@@ -114,6 +152,7 @@ Everything is stored in `~/.juno` (override with the `JUNO_HOME` environment var
   `env:ACME_GITLAB_TOKEN`), which are read from Juno's environment when needed.
 - `logs/<ticket>.log`: agent activity
 - `agent-mcp/<ticket>.json`: per-run MCP config for agents (only that ticket's organisation's servers)
+- `worktrees/<ticket>/`: the git worktree each ticket's agent works in
 
 ## Layout
 
@@ -125,6 +164,7 @@ dev.juno.main
 ├── mcp                  stdio MCP client
 ├── integration          GitLab/GitHub via per-organisation MCP server processes
 ├── agent                Claude Code process runner, stream-json parser, prompts
+├── git                  worktree/branch preparation, commit, push
 ├── service              BoardService: orchestration, thread-safe, UI-agnostic
 └── ui                   Board, cards, dialogs
 ```
