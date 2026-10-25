@@ -176,6 +176,24 @@ public final class GitWorkspace {
                 + "; reconcile it in " + worktree + " first");
     }
 
+    /** A short description of the branch's state for an agent resuming work: commits and uncommitted files. */
+    public String describe(Path worktree, String baseRef) {
+        StringBuilder sb = new StringBuilder();
+        Result log = run(worktree, LOCAL_TIMEOUT, false, "log", "--oneline", "-n", "30", baseRef + "..HEAD");
+        sb.append("Commits on this branch so far:\n")
+                .append(log.ok() && !log.output().isBlank() ? indent(log.output()) : "  (none)\n");
+        Result status = run(worktree, LOCAL_TIMEOUT, false, "status", "--short");
+        sb.append("Uncommitted changes in the worktree:\n")
+                .append(status.ok() && !status.output().isBlank() ? indent(status.output()) : "  (none)\n");
+        return sb.toString();
+    }
+
+    private static String indent(String text) {
+        StringBuilder sb = new StringBuilder();
+        text.lines().limit(60).forEach(l -> sb.append("  ").append(l).append('\n'));
+        return sb.toString();
+    }
+
     /** Pushes the branch to origin and sets its upstream. */
     public void push(Path worktree, String branch) throws GitException {
         require(run(worktree, NETWORK_TIMEOUT, true, "push", "-u", "origin", branch), "git push");

@@ -5,11 +5,11 @@ A JavaFX orchestrator for Claude Code agents. Tickets move across a six-column b
 | Column | Meaning |
 | --- | --- |
 | **Pending** | Created or imported, not started. **Start** hands the ticket to an agent. |
-| **Working** | A Claude Code agent is working on the ticket's branch. The ticket stays here until its branch is pushed and its pull request opened. |
+| **Processing** | An agent is working on the ticket's branch. The ticket stays here until its branch is pushed and its pull request opened. |
 | **Awaiting decision** | The agent asked a question, failed, or Juno couldn't push / open the PR. Answer on the board (**Respond**) or in the ticket's terminal; **Retry** re-runs a failed push. |
-| **AI review** | Branch pushed, PR open (link on the card). **Start AI review** runs an agent on the review comments and pushes its fixes to the PR. |
-| **Human review** | *(move tickets here manually for now; the PR link stays on the card)* |
-| **Done** | *(not automated yet)* |
+| **Review** | PR/MR open (link on the card) and an **AI reviews run** counter. **Run AI review** starts an AI review; **Move to Done** asks for confirmation first. |
+| **In AI review** | An AI review agent is addressing the PR's comments in its own terminal. When it finishes, its fixes are pushed and the ticket returns to Review. |
+| **Done** | Finished. |
 
 Tickets can be imported from or uploaded to GitLab and GitHub. Juno does this through the
 [`juno-gitlab-mcp`](../juno-gitlab-mcp) and [`juno-github-mcp`](../juno-github-mcp) MCP servers, which it
@@ -146,7 +146,8 @@ How it works:
 
 ### AI review
 
-**Start AI review** (AI review column):
+**Run AI review** (Review column). With no new comments on the PR it completes immediately: the counter goes
+up and the ticket stays in Review. Otherwise the ticket moves to **In AI review** while it:
 1. Reads the PR/MR's feedback: conversation comments, review summaries and inline comments with file, line
    and diff context. It also reads comments on the linked issues made since the PR was opened. Resolved
    GitLab threads and Juno's own comments are ignored.
@@ -155,8 +156,29 @@ How it works:
    the last AI review.
 4. Commits, pushes the fixes to the same PR, and posts the agent's summary as a PR comment.
 
-It needs at least one new comment since the last AI review. The review agent gets its own terminal console,
-and its questions also come through Awaiting decision.
+Then the ticket returns to Review with its counter incremented. The review agent gets its own terminal
+(`Juno <ticket> AI review`), and its questions also come through Awaiting decision.
+
+### Interruptions and Resume
+
+Agents run under Juno. If Juno closes, crashes or the computer restarts mid-run, the agent stops, but nothing
+is lost:
+- **Journal.** Every run writes `~/.juno/runs/<ticket>/<time>-<work|review>.jsonl`: every message, tool call
+  and result as it happens. The prompt it was given is saved next to it in `.prompt.md`.
+- **Session id.** The agent's Claude session id is saved the moment the run starts.
+- **Work on disk.** Commits and uncommitted changes stay in the ticket's worktree.
+
+On the next start, such tickets stay in **Processing** or **In AI review**, greyed out, with a **Resume**
+button. Resume:
+1. stops any leftover agent process from the interrupted run (only if it is provably that process);
+2. continues the same Claude session with a recap of the journal (its last steps, marked where it was cut
+   off) and the branch's current commits and uncommitted files;
+3. if that session can't be restored, starts a new session automatically with the original prompt plus the
+   same recap;
+4. if only the final push or PR step was interrupted, simply retries it.
+
+Closing a ticket's terminal window does **not** interrupt the agent; **Terminal** reopens the console. To
+abandon an interrupted run, move the ticket to another column.
 
 ### How agents ask for decisions
 
@@ -188,6 +210,7 @@ Everything is stored in `~/.juno` (override with the `JUNO_HOME` environment var
 - `logs/<ticket>.log`: agent activity
 - `agent-mcp/<ticket>.json`: per-run MCP config for agents (only that ticket's organisation's servers)
 - `worktrees/<ticket>/`: the git worktree each ticket's agent works in
+- `runs/<ticket>/`: the journal and prompt of every agent run, used to resume interrupted work
 - `consoles/`: the scripts that open each ticket's terminal; `console.token` secures the console API
 
 ## Layout

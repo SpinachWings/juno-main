@@ -121,6 +121,49 @@ public final class PromptBuilder {
         return sb.toString();
     }
 
+    /**
+     * Resuming an interrupted run within the same Claude session: the conversation is restored, so this only
+     * explains the interruption and gives the recap and current branch state.
+     */
+    public static String recoveryResume(Ticket ticket, String recap, String gitState) {
+        return """
+                Juno was stopped (for example the computer restarted or Juno closed) while you were working on \
+                ticket %1$s, so your previous run was cut off. Your conversation so far has been restored.
+
+                ## What Juno recorded before the interruption
+                %2$s
+                ## Current state of branch `%3$s`
+                %4$s
+                ## Continue
+                Pick up exactly where you left off. Re-check anything that may have been cut short (a file edit, a \
+                command or build that was running, a commit that may not have happened) before moving on, and \
+                don't redo work that is already done. The same rules as before apply: commit to `%3$s`, don't push \
+                or switch branches, and finish with your summary (or the %5$s line if you need a decision).
+                """.formatted(ticket.getId(), recap, ticket.getBranchName(), gitState,
+                StreamJsonParser.DECISION_MARKER);
+    }
+
+    /**
+     * Recovering an interrupted run in a new session (the previous session could not be restored): the original
+     * prompt plus the recap and branch state.
+     */
+    public static String recoveryFresh(String originalPrompt, Ticket ticket, String recap, String gitState) {
+        return originalPrompt.strip() + """
+
+
+                ## You are resuming interrupted work
+                A previous agent session already worked on this %1$s and was cut off (for example the computer \
+                restarted). Its session could not be restored, so here is Juno's record of what it did and the \
+                current state of the branch. Continue from where it stopped: verify the work already done rather than \
+                repeating it, and finish anything left incomplete.
+
+                ### Recorded steps of the interrupted session
+                %2$s
+                ### Current state of branch `%3$s`
+                %4$s""".formatted(ticket.getRunKind() == RunKind.REVIEW ? "review" : "ticket", recap,
+                ticket.getBranchName(), gitState);
+    }
+
     private static java.util.Optional<java.time.Instant> parse(String iso) {
         try {
             return java.util.Optional.of(java.time.OffsetDateTime.parse(iso).toInstant());

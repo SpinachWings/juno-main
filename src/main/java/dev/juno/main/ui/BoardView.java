@@ -350,7 +350,8 @@ public final class BoardView {
             public void respond(Ticket t, Window owner) {
                 new DecisionDialog(owner, t).showAndWait().ifPresent(decision -> {
                     if (decision.backToPending()) {
-                        move(t, TicketStatus.PENDING, owner);
+                        move(t, t.getRunKind() == dev.juno.main.model.RunKind.REVIEW
+                                ? TicketStatus.REVIEW : TicketStatus.PENDING, owner);
                         return;
                     }
                     Fx.async(() -> {
@@ -393,11 +394,35 @@ public final class BoardView {
             public void startReview(Ticket t, Window owner) {
                 status("Reading review comments for " + t.getId() + "…");
                 Fx.async(() -> service.startReview(t.getId()),
-                        count -> status("AI review started on " + t.getId() + " with " + count + " comment(s)"),
+                        count -> status(count == 0
+                                ? "No new comments on " + t.getId() + "'s pull request; AI review "
+                                        + t.getReviewCount() + " completed immediately"
+                                : "AI review started on " + t.getId() + " with " + count + " comment(s)"),
                         err -> {
                             status("AI review not started");
                             Fx.error(owner, "Could not start the AI review", err);
                         });
+            }
+
+            @Override
+            public void resume(Ticket t, Window owner) {
+                status("Resuming " + t.getId() + "…");
+                Fx.async(() -> {
+                    service.resumeInterrupted(t.getId());
+                    return null;
+                }, ok -> status("Resumed " + t.getId()), err -> {
+                    status("Could not resume " + t.getId());
+                    Fx.error(owner, "Could not resume " + t.getId(), err);
+                });
+            }
+
+            @Override
+            public void moveToDone(Ticket t, Window owner) {
+                if (Fx.confirm(owner, "Move " + t.getId() + " to Done?", "Are you sure? " + t.getId()
+                        + " will leave Review" + (t.getPullRequest() == null ? "."
+                        : ". Its " + t.getPullRequest().tracker().pullRequestNoun() + " is not merged or closed by Juno."))) {
+                    move(t, TicketStatus.DONE, owner);
+                }
             }
 
             @Override

@@ -29,6 +29,10 @@ public final class AgentRunner {
         void log(String ticketId, String line);
 
         void finished(String ticketId, AgentOutcome outcome);
+
+        /** Every raw stdout line (stream-json), before formatting; used for the run journal. */
+        default void raw(String ticketId, String line) {
+        }
     }
 
     /**
@@ -69,7 +73,8 @@ public final class AgentRunner {
         return runs.size();
     }
 
-    public synchronized void start(Request request) throws IOException {
+    /** Starts the agent and returns its process id. */
+    public synchronized long start(Request request) throws IOException {
         if (runs.containsKey(request.ticketId())) {
             throw new IllegalStateException(request.ticketId() + " already has a running agent");
         }
@@ -104,6 +109,7 @@ public final class AgentRunner {
         runs.put(request.ticketId(), run);
 
         Thread.ofPlatform().daemon().name("agent-" + request.ticketId()).start(() -> supervise(request, run));
+        return process.pid();
     }
 
     private void supervise(Request request, Run run) {
@@ -138,6 +144,7 @@ public final class AgentRunner {
         try (var out = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
             String line;
             while ((line = out.readLine()) != null) {
+                listener.raw(ticketId, line);
                 for (String entry : parser.accept(line)) {
                     listener.log(ticketId, entry);
                 }
@@ -180,6 +187,26 @@ public final class AgentRunner {
     public void shutdown() {
         shuttingDown = true;
         runs.values().forEach(r -> kill(r.process));
+    }
+
+    /**
+     * Kills an agent left running by a previous Juno session (e.g. Juno crashed but the agent didn't), so it
+     * can't keep editing the worktree while a resumed agent works there. To avoid hitting an unrelated process
+     * that reused the id after a restart, it only acts if the process started within two minutes of the run.
+     *
+     * @return true if a process was stopped
+     */
+    public static boolean killOrphan(long pid, java.time.Instant runStartedAt) {
+        if (pid <= 0 || runStartedAt == null) {
+            return false;
+        }
+        return ProcessHandle.of(pid).filter(ProcessHandle::isAlive).filter(h -> h.info().startInstant()
+                .map(start -> java.time.Duration.between(runStartedAt, start).abs().toMinutes() < 2)
+                .orElse(false)).map(h -> {
+                    h.descendants().forEach(ProcessHandle::destroy);
+                    h.destroy();
+                    return true;
+                }).orElse(false);
     }
 
     private static void kill(Process process) {

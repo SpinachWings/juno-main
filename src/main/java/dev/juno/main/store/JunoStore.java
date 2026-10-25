@@ -110,7 +110,33 @@ public final class JunoStore {
     }
 
     public BoardData loadBoard() {
-        return read(home.resolve("board.json"), BoardData.class, BoardData::new);
+        Path file = home.resolve("board.json");
+        if (!Files.exists(file)) {
+            return new BoardData();
+        }
+        try {
+            JsonNode tree = mapper.readTree(file.toFile());
+            if (migrateBoard(tree)) {
+                Files.copy(file, file.resolveSibling("board.pre-review-columns.json"),
+                        StandardCopyOption.REPLACE_EXISTING);
+            }
+            return mapper.treeToValue(tree, BoardData.class);
+        } catch (IOException e) {
+            return read(file, BoardData.class, BoardData::new);
+        }
+    }
+
+    /** Maps statuses from earlier versions: AI review / Human review became the Review column. */
+    static boolean migrateBoard(JsonNode tree) {
+        boolean changed = false;
+        for (JsonNode ticket : tree.path("tickets")) {
+            String status = ticket.path("status").asText("");
+            if ((status.equals("AI_REVIEW") || status.equals("HUMAN_REVIEW")) && ticket instanceof ObjectNode o) {
+                o.put("status", "REVIEW");
+                changed = true;
+            }
+        }
+        return changed;
     }
 
     public void saveBoard(BoardData board) {
@@ -124,6 +150,11 @@ public final class JunoStore {
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
+    }
+
+    /** Folder holding a ticket's run journals and prompts. */
+    public Path runsDir(String ticketId) {
+        return home.resolve("runs").resolve(ticketId.replaceAll("[^A-Za-z0-9_.-]", "_"));
     }
 
     public Path logFile(String ticketId) {

@@ -53,8 +53,8 @@ public final class JunoApp extends Application {
         stage.setOnCloseRequest(event -> {
             int running = service.runningAgents();
             if (running > 0 && !Fx.confirm(stage, "Quit Juno?",
-                    running + " agent(s) are still working. Quitting stops them; their tickets will be "
-                            + "waiting for a decision (resume) when Juno next starts.")) {
+                    running + " agent(s) are still working. Quitting stops them; their tickets are kept "
+                            + "(greyed out) with a Resume button that continues from their recorded journal.")) {
                 event.consume();
             }
         });

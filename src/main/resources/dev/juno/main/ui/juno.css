@@ -169,8 +169,6 @@
     -fx-font-size: 12px;
 }
 
-.column-ai-review .column-title,
-.column-human-review .column-title,
 .column-done .column-title {
     -fx-text-fill: derive(#6FD6FF, -35%);
 }
@@ -678,4 +676,35 @@
 .card-pr-link {
     -fx-text-fill: -magenta;
     -fx-font-size: 12px;
+}
+
+/* ---- interrupted tickets: greyed out until resumed ---- */
+
+.ticket-card.ticket-interrupted {
+    -fx-background-color: #0F0F12;
+    -fx-border-color: -line-strong;
+    -fx-border-style: segments(4, 4);
+    -fx-opacity: 0.85;
+}
+
+.ticket-interrupted .card-title,
+.ticket-interrupted .card-meta,
+.ticket-interrupted .card-agent,
+.ticket-interrupted .card-note,
+.ticket-interrupted .card-review-count {
+    -fx-text-fill: derive(#848A98, -25%);
+}
+
+.card-interrupted {
+    -fx-text-fill: #C9A227;
+    -fx-font-size: 12px;
+}
+
+.card-review-count {
+    -fx-text-fill: -blue;
+    -fx-font-size: 11px;
+}
+
+.column-in-ai-review .column-title {
+    -fx-text-fill: -magenta;
 }

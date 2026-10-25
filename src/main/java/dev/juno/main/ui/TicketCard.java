@@ -54,6 +54,10 @@ final class TicketCard {
         void terminal(Ticket t, Window owner);
 
         void startReview(Ticket t, Window owner);
+
+        void resume(Ticket t, Window owner);
+
+        void moveToDone(Ticket t, Window owner);
     }
 
     private TicketCard() {
@@ -113,32 +117,41 @@ final class TicketCard {
 
         boolean running = service.isAgentRunning(ticket.getId());
         boolean delivering = service.isOpeningPullRequest(ticket.getId());
-        boolean reviewing = service.isReviewRunning(ticket.getId());
+        boolean interrupted = ticket.isInterrupted() && !running && !delivering;
         PullRequestRef pr = ticket.getPullRequest();
-        switch (ticket.getStatus()) {
-            case WORKING -> {
-                if (!delivering) {
-                    card.getChildren().add(progress(running ? "Agent working…" : "Agent not running"));
+        if (interrupted) {
+            card.getStyleClass().add("ticket-interrupted");
+            card.getChildren().add(excerpt("Interrupted: Juno stopped while this "
+                    + (ticket.isDeliveryPending() && ticket.getActiveRun() == null ? "was being pushed"
+                    : ticket.getRunKind() == RunKind.REVIEW ? "AI review was running" : "was being worked on")
+                    + ". Resume picks up from the recorded journal.", "card-interrupted"));
+        } else {
+            switch (ticket.getStatus()) {
+                case WORKING -> {
+                    if (!delivering) {
+                        card.getChildren().add(progress(running ? "Agent working…" : "Agent not running"));
+                    }
                 }
-            }
-            case AWAITING_DECISION -> card.getChildren().add(excerpt(ticket.getPendingQuestion(), "card-question"));
-            case AI_REVIEW -> {
-                if (reviewing) {
-                    card.getChildren().add(progress("AI review agent working…"));
-                } else if (ticket.getReviewCount() > 0 && ticket.getLastReviewSummary() != null) {
-                    card.getChildren().add(excerpt("AI review " + ticket.getReviewCount() + ": "
-                            + ticket.getLastReviewSummary(), "card-note"));
-                } else if (ticket.getLastSummary() != null && !ticket.getLastSummary().isBlank()) {
-                    card.getChildren().add(excerpt(ticket.getLastSummary(), "card-note"));
+                case IN_AI_REVIEW -> {
+                    if (!delivering) {
+                        card.getChildren().add(progress(running ? "AI review agent working…" : "Starting AI review…"));
+                    }
                 }
-            }
-            case PENDING -> {
-                if (service.isPreparing(ticket.getId())) {
-                    card.getChildren().add(progress("Preparing branch " + ticket.getBranchName() + "…"));
+                case AWAITING_DECISION -> card.getChildren().add(excerpt(ticket.getPendingQuestion(), "card-question"));
+                case REVIEW -> {
+                    String last = ticket.getReviewCount() > 0 ? ticket.getLastReviewSummary() : ticket.getLastSummary();
+                    if (last != null && !last.isBlank()) {
+                        card.getChildren().add(excerpt(last, "card-note"));
+                    }
                 }
-            }
-            default -> {
-                // no extra content
+                case PENDING -> {
+                    if (service.isPreparing(ticket.getId())) {
+                        card.getChildren().add(progress("Preparing branch " + ticket.getBranchName() + "…"));
+                    }
+                }
+                default -> {
+                    // no extra content
+                }
             }
         }
 
@@ -147,6 +160,12 @@ final class TicketCard {
             branch.getStyleClass().add("card-agent");
             branch.setWrapText(true);
             card.getChildren().add(branch);
+        }
+        if (ticket.getStatus() == TicketStatus.REVIEW || ticket.getStatus() == TicketStatus.IN_AI_REVIEW
+                || ticket.getReviewCount() > 0) {
+            Label counter = new Label("AI reviews run: " + ticket.getReviewCount());
+            counter.getStyleClass().add("card-review-count");
+            card.getChildren().add(counter);
         }
         if (delivering) {
             card.getChildren().add(progress(ticket.getRunKind() == RunKind.REVIEW
@@ -174,64 +193,73 @@ final class TicketCard {
                 b -> actions.terminal(ticket, b.getScene().getWindow()));
         terminal.getStyleClass().add(service.isTerminalOpen(ticket.getId()) ? "terminal-open" : "terminal-closed");
         boolean hasTerminal = ticket.isBranchLocked();
-        switch (ticket.getStatus()) {
-            case PENDING -> {
-                Button start = button("Start", "Create the ticket's branch and hand the ticket to an agent",
-                        b -> actions.start(ticket, b.getScene().getWindow()));
-                start.getStyleClass().add("accent");
-                start.setDisable(service.isPreparing(ticket.getId()));
-                buttons.getChildren().add(start);
-                if (hasTerminal) {
-                    buttons.getChildren().add(terminal);
-                }
-                buttons.getChildren().add(details);
+        if (interrupted) {
+            Button resume = button("Resume", "Continue the interrupted run: the agent's session (or a new one) gets "
+                            + "a recap of its recorded actions and the branch's current state",
+                    b -> actions.resume(ticket, b.getScene().getWindow()));
+            resume.getStyleClass().add("accent");
+            buttons.getChildren().add(resume);
+            if (hasTerminal) {
+                buttons.getChildren().add(terminal);
             }
-            case WORKING -> {
-                Button stop = button("Stop", "Stop the agent",
-                        b -> actions.stop(ticket, b.getScene().getWindow()));
-                stop.setDisable(!running);
-                buttons.getChildren().addAll(terminal, logButton(ticket, actions), stop, details);
-            }
-            case AWAITING_DECISION -> {
-                Button respond = button("Respond", "Answer the agent and resume its session",
-                        b -> actions.respond(ticket, b.getScene().getWindow()));
-                respond.getStyleClass().add("accent");
-                buttons.getChildren().add(respond);
-                if (ticket.getPullRequestError() != null && ticket.isBranchLocked()) {
-                    Button retry = button("Retry", "Commit, push and " + (ticket.getRunKind() == RunKind.REVIEW
-                                    ? "post the review again" : "open the pull request again"),
-                            b -> actions.retryPullRequest(ticket, b.getScene().getWindow()));
-                    retry.setDisable(delivering);
-                    buttons.getChildren().add(retry);
+            buttons.getChildren().addAll(logButton(ticket, actions), details);
+        } else {
+            switch (ticket.getStatus()) {
+                case PENDING -> {
+                    Button start = button("Start", "Create the ticket's branch and hand the ticket to an agent",
+                            b -> actions.start(ticket, b.getScene().getWindow()));
+                    start.getStyleClass().add("accent");
+                    start.setDisable(service.isPreparing(ticket.getId()));
+                    buttons.getChildren().add(start);
+                    if (hasTerminal) {
+                        buttons.getChildren().add(terminal);
+                    }
+                    buttons.getChildren().add(details);
                 }
-                if (hasTerminal) {
-                    buttons.getChildren().add(terminal);
-                }
-                buttons.getChildren().addAll(logButton(ticket, actions), details);
-            }
-            case AI_REVIEW -> {
-                if (reviewing) {
-                    Button stop = button("Stop", "Stop the AI review agent",
+                case WORKING, IN_AI_REVIEW -> {
+                    Button stop = button("Stop", "Stop the agent",
                             b -> actions.stop(ticket, b.getScene().getWindow()));
+                    stop.setDisable(!running);
                     buttons.getChildren().addAll(terminal, logButton(ticket, actions), stop, details);
-                } else {
-                    Button review = button("Start AI review", "Run an agent that reads the comments on the "
-                                    + "pull request and linked issue, makes the changes and pushes them to the PR",
-                            b -> actions.startReview(ticket, b.getScene().getWindow()));
-                    review.getStyleClass().add("accent");
-                    review.setDisable(pr == null || delivering || service.isPreparing(ticket.getId()));
-                    buttons.getChildren().add(review);
+                }
+                case AWAITING_DECISION -> {
+                    Button respond = button("Respond", "Answer the agent and resume its session",
+                            b -> actions.respond(ticket, b.getScene().getWindow()));
+                    respond.getStyleClass().add("accent");
+                    buttons.getChildren().add(respond);
+                    if (ticket.getPullRequestError() != null && ticket.isBranchLocked()) {
+                        Button retry = button("Retry", "Commit, push and " + (ticket.getRunKind() == RunKind.REVIEW
+                                        ? "post the review again" : "open the pull request again"),
+                                b -> actions.retryPullRequest(ticket, b.getScene().getWindow()));
+                        retry.setDisable(delivering);
+                        buttons.getChildren().add(retry);
+                    }
                     if (hasTerminal) {
                         buttons.getChildren().add(terminal);
                     }
                     buttons.getChildren().addAll(logButton(ticket, actions), details);
                 }
-            }
-            default -> {
-                if (hasTerminal) {
-                    buttons.getChildren().add(terminal);
+                case REVIEW -> {
+                    Button review = button("Run AI review", "Run an agent that reads the comments on the pull "
+                                    + "request and linked issue, makes the changes and pushes them to the PR. "
+                                    + "With no comments it completes immediately.",
+                            b -> actions.startReview(ticket, b.getScene().getWindow()));
+                    review.getStyleClass().add("accent");
+                    review.setDisable(pr == null || delivering || service.isPreparing(ticket.getId()));
+                    Button done = button("Move to Done", "Mark the ticket as done",
+                            b -> actions.moveToDone(ticket, b.getScene().getWindow()));
+                    buttons.getChildren().addAll(review, done);
+                    if (hasTerminal) {
+                        buttons.getChildren().add(terminal);
+                    }
+                    buttons.getChildren().addAll(logButton(ticket, actions), details);
                 }
-                buttons.getChildren().addAll(logButton(ticket, actions), details);
+                default -> {
+                    if (hasTerminal) {
+                        buttons.getChildren().add(terminal);
+                    }
+                    buttons.getChildren().addAll(logButton(ticket, actions), details);
+                }
             }
         }
         card.getChildren().add(buttons);
@@ -252,7 +280,8 @@ final class TicketCard {
         Menu moveTo = new Menu("Move to");
         for (TicketStatus status : TicketStatus.values()) {
             MenuItem item = new MenuItem(status.label());
-            item.setDisable(running || status == TicketStatus.WORKING || status == ticket.getStatus());
+            item.setDisable(running || status == TicketStatus.WORKING || status == TicketStatus.IN_AI_REVIEW
+                    || status == ticket.getStatus());
             item.setOnAction(e -> actions.move(ticket, status, card.getScene().getWindow()));
             moveTo.getItems().add(item);
         }

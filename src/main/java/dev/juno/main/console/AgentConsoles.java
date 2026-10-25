@@ -94,52 +94,59 @@ public final class AgentConsoles implements AutoCloseable {
         return server.getAddress().getPort();
     }
 
-    public static String windowTitle(String ticketId) {
-        return "Juno " + ticketId;
+    /** Console identity: the ticket, plus a variant for AI review runs (which get their own terminal). */
+    public static String key(String ticketId, String variant) {
+        return variant == null || variant.isBlank() ? ticketId : ticketId + "-" + variant;
     }
 
-    /** Whether a console for the ticket has polled recently (or was just opened). */
-    public boolean isOpen(String ticketId) {
-        Long seen = lastSeen.get(ticketId);
+    public static String windowTitle(String ticketId, String variant) {
+        return "Juno " + ticketId + ("review".equals(variant) ? " AI review" : "");
+    }
+
+    /** Whether the console with this key has polled recently (or was just opened). */
+    public boolean isOpen(String consoleKey) {
+        Long seen = lastSeen.get(consoleKey);
         return seen != null && System.currentTimeMillis() - seen < ALIVE_MS;
     }
 
-    /** Opens a console for the ticket unless one is already open. */
-    public void ensureOpen(String ticketId, String terminalCommand) throws IOException {
-        if (!isOpen(ticketId)) {
-            open(ticketId, terminalCommand);
+    /** Opens a console for the ticket's run unless one is already open. */
+    public void ensureOpen(String ticketId, String variant, String terminalCommand) throws IOException {
+        if (!isOpen(key(ticketId, variant))) {
+            open(ticketId, variant, terminalCommand);
         }
     }
 
     /**
-     * Brings the ticket's console to the front, opening a new one if none is running.
+     * Brings the console to the front, opening a new one if none is running.
      *
      * @return a short description of what happened, for the status bar
      */
-    public String show(String ticketId, String terminalCommand) throws IOException {
-        String title = windowTitle(ticketId);
-        if (isOpen(ticketId)) {
+    public String show(String ticketId, String variant, String terminalCommand) throws IOException {
+        String title = windowTitle(ticketId, variant);
+        if (isOpen(key(ticketId, variant))) {
             if (launcher.focus(title)) {
-                return "Switched to the terminal for " + ticketId;
+                return "Switched to '" + title + "'";
             }
-            return "The terminal for " + ticketId + " is already open: look for the window titled '" + title + "'";
+            return "The terminal is already open: look for the window titled '" + title + "'";
         }
-        open(ticketId, terminalCommand);
-        return "Opened a terminal for " + ticketId;
+        open(ticketId, variant, terminalCommand);
+        return "Opened '" + title + "'";
     }
 
-    private void open(String ticketId, String terminalCommand) throws IOException {
-        lastSeen.put(ticketId, System.currentTimeMillis()); // avoid opening twice while it starts
+    private void open(String ticketId, String variant, String terminalCommand) throws IOException {
+        String consoleKey = key(ticketId, variant);
+        lastSeen.put(consoleKey, System.currentTimeMillis()); // avoid opening twice while it starts
         try {
-            launcher.open(safe(ticketId), windowTitle(ticketId), consoleCommand(ticketId), terminalCommand);
+            launcher.open(safe(consoleKey), windowTitle(ticketId, variant), consoleCommand(ticketId, consoleKey),
+                    terminalCommand);
         } catch (IOException e) {
-            lastSeen.remove(ticketId);
+            lastSeen.remove(consoleKey);
             throw e;
         }
     }
 
     /** The java command that runs {@link AgentConsole} with the same runtime and module path as Juno. */
-    List<String> consoleCommand(String ticketId) {
+    List<String> consoleCommand(String ticketId, String consoleKey) {
         String java = ProcessHandle.current().info().command().orElse("java");
         // javaw.exe (no console) would hide all output; use java.exe next to it.
         java = java.replaceFirst("(?i)javaw(\\.exe)?$", "java$1");
@@ -159,7 +166,7 @@ public final class AgentConsoles implements AutoCloseable {
             cmd.add(AgentConsole.class.getName());
         }
         cmd.addAll(List.of("--port", Integer.toString(port()), "--token-file", tokenFile.toString(),
-                "--ticket", ticketId));
+                "--ticket", ticketId, "--console", consoleKey));
         return cmd;
     }
 
@@ -172,6 +179,7 @@ public final class AgentConsoles implements AutoCloseable {
             }
             Map<String, String> q = query(exchange);
             String ticketId = q.getOrDefault("ticket", "");
+            String consoleKey = q.getOrDefault("console", ticketId);
             long from = parseLong(q.get("from"), 0);
             String clientSig = q.getOrDefault("state", "");
             long waitMs = Math.min(25, Math.max(0, parseLong(q.get("wait"), 20))) * 1000;
@@ -180,7 +188,7 @@ public final class AgentConsoles implements AutoCloseable {
             long deadline = System.currentTimeMillis() + waitMs;
             Optional<TicketState> state;
             while (true) {
-                lastSeen.put(ticketId, System.currentTimeMillis());
+                lastSeen.put(consoleKey, System.currentTimeMillis());
                 state = backend.state(ticketId);
                 long size = Files.exists(log) ? Files.size(log) : 0;
                 if (from > size) {

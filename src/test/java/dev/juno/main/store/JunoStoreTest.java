@@ -78,6 +78,21 @@ class JunoStoreTest {
     }
 
     @Test
+    void migratesOldReviewColumns() throws Exception {
+        Files.writeString(home.resolve("board.json"), """
+                {"nextTicketNumber": 4, "tickets": [
+                  {"id": "JUNO-1", "title": "a", "status": "AI_REVIEW"},
+                  {"id": "JUNO-2", "title": "b", "status": "HUMAN_REVIEW"},
+                  {"id": "JUNO-3", "title": "c", "status": "DONE"}]}
+                """);
+        var tickets = new JunoStore(home).loadBoard().getTickets();
+        assertEquals(TicketStatus.REVIEW, tickets.get(0).getStatus());
+        assertEquals(TicketStatus.REVIEW, tickets.get(1).getStatus());
+        assertEquals(TicketStatus.DONE, tickets.get(2).getStatus());
+        assertTrue(Files.exists(home.resolve("board.pre-review-columns.json")));
+    }
+
+    @Test
     void migratesSingleOrganisationSettings() throws Exception {
         Files.writeString(home.resolve("settings.json"), """
                 {

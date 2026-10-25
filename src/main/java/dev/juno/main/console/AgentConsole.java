@@ -38,27 +38,31 @@ public final class AgentConsole {
     private final String base;
     private final String token;
     private final String ticket;
+    private final String consoleKey;
 
     private final Object inputLock = new Object();
     /** The question currently awaiting an answer, or null. */
     private volatile String awaiting;
     private final StringBuilder answer = new StringBuilder();
 
-    private AgentConsole(int port, String token, String ticket) {
+    private AgentConsole(int port, String token, String ticket, String consoleKey) {
         this.base = "http://127.0.0.1:" + port + "/api/";
         this.token = token;
         this.ticket = ticket;
+        this.consoleKey = consoleKey == null ? ticket : consoleKey;
     }
 
     public static void main(String[] args) throws Exception {
         int port = 0;
         String tokenFile = null;
         String ticket = null;
+        String consoleKey = null;
         for (int i = 0; i + 1 < args.length; i += 2) {
             switch (args[i]) {
                 case "--port" -> port = Integer.parseInt(args[i + 1]);
                 case "--token-file" -> tokenFile = args[i + 1];
                 case "--ticket" -> ticket = args[i + 1];
+                case "--console" -> consoleKey = args[i + 1];
                 default -> {
                     // ignore unknown options
                 }
@@ -69,12 +73,12 @@ public final class AgentConsole {
             System.exit(2);
         }
         String token = Files.readString(Path.of(tokenFile), StandardCharsets.UTF_8).strip();
-        new AgentConsole(port, token, ticket).run();
+        new AgentConsole(port, token, ticket, consoleKey).run();
     }
 
     private void run() {
         out.println(RULE);
-        out.println(" Juno agent console - " + ticket);
+        out.println(" Juno agent console - " + ticket + (consoleKey.endsWith("-review") ? " (AI review)" : ""));
         out.println(" Live agent activity. When the agent asks for a decision you can answer here or on the board.");
         out.println(RULE);
 
@@ -89,8 +93,8 @@ public final class AgentConsole {
         while (true) {
             JsonNode response;
             try {
-                response = get("stream?ticket=" + enc(ticket) + "&from=" + offset + "&state=" + enc(signature)
-                        + "&wait=20");
+                response = get("stream?ticket=" + enc(ticket) + "&console=" + enc(consoleKey) + "&from=" + offset
+                        + "&state=" + enc(signature) + "&wait=20");
                 if (failures > 0) {
                     out.println("[juno] reconnected");
                 }
@@ -162,7 +166,7 @@ public final class AgentConsole {
         if (!announced && !status.equals(lastStatus) && lastStatus != null && !waiting) {
             out.println("[juno] Ticket is now: " + label);
         }
-        if ("AI_REVIEW".equals(status) && !state.path("running").asBoolean(false)
+        if ("REVIEW".equals(status) && !state.path("running").asBoolean(false)
                 && !state.path("delivering").asBoolean(false) && state.hasNonNull("pr")
                 && !status.equals(lastStatus)) {
             out.println("[juno] Pull request: " + state.get("pr").asText());

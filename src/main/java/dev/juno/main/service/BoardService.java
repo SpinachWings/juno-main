@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import dev.juno.main.agent.AgentOutcome;
 import dev.juno.main.agent.AgentRunner;
 import dev.juno.main.agent.PromptBuilder;
+import dev.juno.main.agent.RunJournal;
 import dev.juno.main.console.AgentConsoles;
 import dev.juno.main.git.GitException;
 import dev.juno.main.git.GitWorkspace;
@@ -13,6 +14,7 @@ import dev.juno.main.integration.IssueData;
 import dev.juno.main.integration.IssueTrackerService;
 import dev.juno.main.integration.ReviewComment;
 import dev.juno.main.mcp.McpException;
+import dev.juno.main.model.ActiveRun;
 import dev.juno.main.model.AgentAssignment;
 import dev.juno.main.model.AgentProfile;
 import dev.juno.main.model.ExternalRef;
@@ -55,9 +57,6 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         void logged(String ticketId, String line);
     }
 
-    static final String INTERRUPTED_QUESTION = "Juno was closed while the agent was working on this ticket. "
-            + "Reply to resume the agent's session, or move the ticket back to Pending.";
-
     private final JunoStore store;
     private final JunoStore.BoardData board;
     private JunoSettings settings;
@@ -72,6 +71,8 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
     private final Set<String> delivering = ConcurrentHashMap.newKeySet();
     /** When each in-progress AI review started (comments after this are "new" next time). */
     private final Map<String, Instant> reviewStarts = new ConcurrentHashMap<>();
+    /** Journal of each running agent. */
+    private final Map<String, Path> journals = new ConcurrentHashMap<>();
     /** Terminal consoles; null if the local console server could not start. */
     private final AgentConsoles consoles;
 
@@ -228,10 +229,19 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         return hasLinks && oldOrg != null && !oldOrg.equals(newOrg);
     }
 
-    /** Manually moves a ticket between columns (not into or out of Working while an agent runs). */
+    /**
+     * Manually moves a ticket between columns (not into Processing or In AI review, which only agents do, and not
+     * while an agent runs). Moving an interrupted ticket abandons the interrupted run.
+     */
     public void move(String ticketId, TicketStatus target) throws JunoException {
         if (target == TicketStatus.WORKING) {
-            throw new JunoException("Use Start to put a ticket into Working");
+            throw new JunoException("Use Start to put a ticket into Processing");
+        }
+        if (target == TicketStatus.IN_AI_REVIEW) {
+            throw new JunoException("Use Run AI review to put a ticket into In AI review");
+        }
+        if (preparing.contains(ticketId) || delivering.contains(ticketId)) {
+            throw new JunoException(ticketId + " is busy; wait for it to finish first");
         }
         if (runner.isRunning(ticketId)) {
             throw new JunoException("Stop the running agent before moving " + ticketId);
@@ -241,6 +251,11 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
             t.setStatus(target);
             if (target != TicketStatus.AWAITING_DECISION) {
                 t.setPendingQuestion(null);
+            }
+            if (t.isInterrupted()) {
+                t.setInterrupted(false);
+                t.setActiveRun(null);
+                t.setDeliveryPending(false);
             }
             t.touch();
             persist();
@@ -264,7 +279,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
      * the resolved agent there with the ticket and its initial instructions as the prompt.
      */
     public void startWork(String ticketId) throws JunoException {
-        beginRun(ticketId, RunKind.WORK, null, null);
+        beginRun(ticketId, RunKind.WORK, null, null, null);
     }
 
     /** Answers an agent's question (or retries after a failure / interruption) and resumes its session. */
@@ -280,7 +295,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
             }
             kind = t.getRunKind();
         }
-        beginRun(ticketId, kind, answer, null);
+        beginRun(ticketId, kind, answer, null, null);
     }
 
     /** Feedback gathered for an AI review run. */
@@ -305,6 +320,9 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
                 throw new JunoException(ticketId + " already has an agent running");
             }
             t = require(ticketId);
+            if (t.getStatus() != TicketStatus.REVIEW) {
+                throw new JunoException(t.getId() + " is not in the Review column");
+            }
             pr = t.getPullRequest();
             if (pr == null) {
                 throw new JunoException(t.getId() + " has no pull request to review yet");
@@ -343,16 +361,74 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         boolean anyNew = feedback.stream().anyMatch(c -> since == null || parseInstant(c.createdAt()) == null
                 || parseInstant(c.createdAt()).isAfter(since));
         if (!anyNew) {
-            throw new JunoException("There are no " + (since == null ? "" : "new ") + "comments on " + pr.display()
-                    + (since == null ? "" : " since the last AI review")
-                    + ". Leave review comments on " + pr.tracker().displayName() + " first.");
+            // Nothing to address: the review completes immediately and the ticket stays in Review.
+            String summary = "No " + (since == null ? "" : "new ") + "comments on " + pr.display()
+                    + (since == null ? "" : " since the last AI review") + "; nothing to change.";
+            synchronized (this) {
+                t.setReviewCount(t.getReviewCount() + 1);
+                t.setLastReviewAt(Instant.now().toString());
+                t.setLastReviewSummary(summary);
+                t.touch();
+                persist();
+            }
+            log(ticketId, "");
+            log(ticketId, "=== AI review " + t.getReviewCount() + ": " + summary + " ===");
+            fireChanged();
+            return 0;
         }
         reviewStarts.put(ticketId, Instant.now());
-        beginRun(ticketId, RunKind.REVIEW, null, new ReviewInput(feedback, since));
+        beginRun(ticketId, RunKind.REVIEW, null, new ReviewInput(feedback, since), null);
         return feedback.size();
     }
 
-    private void beginRun(String ticketId, RunKind kind, String answer, ReviewInput review) throws JunoException {
+    /** How to recover an interrupted run: the Claude session to resume (if any) and the journal to recap. */
+    private record Recovery(String sessionId, Path sourceJournal) {
+    }
+
+    /**
+     * Resumes a ticket whose agent run (or push) was cut short by Juno closing, a crash or a restart. A run is
+     * continued in its own Claude session with a recap of the journal and the branch's current state; if that
+     * session can't be restored, a fresh session gets the original prompt plus the same recap. An interrupted
+     * push / pull request is simply retried.
+     */
+    public void resumeInterrupted(String ticketId) throws JunoException {
+        ActiveRun run;
+        boolean deliveryOnly;
+        RunKind kind;
+        String session;
+        Path source;
+        synchronized (this) {
+            Ticket t = require(ticketId);
+            if (!t.isInterrupted()) {
+                throw new JunoException(ticketId + " is not interrupted");
+            }
+            run = t.getActiveRun();
+            deliveryOnly = run == null && t.isDeliveryPending();
+            kind = run != null ? run.kind() : t.getRunKind();
+            session = run != null && run.sessionId() != null ? run.sessionId() : t.getAgentSessionId();
+            source = run != null && run.journal() != null ? Path.of(run.journal())
+                    : t.getLastJournal() != null ? Path.of(t.getLastJournal()) : null;
+        }
+        if (run != null && AgentRunner.killOrphan(run.pid(), parseInstant(run.startedAt()))) {
+            log(ticketId, "[juno] stopped an agent process left over from the interrupted run");
+        }
+        log(ticketId, "");
+        log(ticketId, "=== Resuming interrupted " + (deliveryOnly ? "push / pull request"
+                : kind == RunKind.REVIEW ? "AI review" : "work") + " ===");
+        if (deliveryOnly) {
+            synchronized (this) {
+                ticket(ticketId).ifPresent(t -> t.setInterrupted(false));
+                persist();
+            }
+            fireChanged();
+            Thread.ofPlatform().daemon().name("deliver-" + ticketId).start(() -> deliver(ticketId));
+            return;
+        }
+        beginRun(ticketId, kind, null, null, new Recovery(session, source));
+    }
+
+    private void beginRun(String ticketId, RunKind kind, String answer, ReviewInput review, Recovery recovery)
+            throws JunoException {
         boolean resume = answer != null;
         Path repo;
         Path worktree;
@@ -389,14 +465,36 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
             try {
                 GitWorkspace git = git(ticketId);
                 prepared = git.prepare(repo, worktree, base, branch);
-                if (kind == RunKind.REVIEW && !resume) {
+                if (kind == RunKind.REVIEW && !resume && recovery == null) {
                     git.syncWithRemote(prepared.worktree(), branch);
                 }
             } catch (GitException e) {
                 log(ticketId, "[juno] " + e.getMessage());
                 throw new JunoException("Could not prepare the ticket's branch: " + e.getMessage(), e);
             }
+            // For recovery: what the interrupted run did, and where the branch stands now.
+            String recap = null;
+            String gitState = null;
+            String originalPrompt = null;
+            if (recovery != null) {
+                recap = recovery.sourceJournal() != null && Files.exists(recovery.sourceJournal())
+                        ? RunJournal.recap(recovery.sourceJournal(), 12_000)
+                        : "(No journal was recorded for the interrupted run.)";
+                String baseRef;
+                synchronized (this) {
+                    Ticket t = require(ticketId);
+                    baseRef = t.getBaseRef() != null ? t.getBaseRef() : base;
+                }
+                gitState = git(ticketId).describe(prepared.worktree(), baseRef);
+                originalPrompt = recovery.sourceJournal() == null ? null : RunJournal.readPrompt(recovery.sourceJournal());
+            }
+            String recapText = recap;
+            String gitText = gitState;
+            String original = originalPrompt;
+
             AgentRunner.Request request;
+            Path journal;
+            ActiveRun previousRun;
             synchronized (this) {
                 Ticket t = require(ticketId);
                 t.setWorktreePath(prepared.worktree().toString());
@@ -406,9 +504,23 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
                 t.setRunKind(kind);
                 t.setPullRequestError(null);
                 persist();
-                String session = resume ? t.getAgentSessionId() : null;
+                String session = recovery != null ? recovery.sessionId() : resume ? t.getAgentSessionId() : null;
+                String mode = recovery != null ? (session != null ? "recovery-resume" : "recovery-fresh")
+                        : resume ? "resume" : "fresh";
                 request = buildRequest(t, session, prepared.worktree(), tools -> {
                     Project p = requireProjectUnchecked(t);
+                    if (recovery != null) {
+                        if (session != null) {
+                            return PromptBuilder.recoveryResume(t, recapText, gitText);
+                        }
+                        String basePrompt = original != null ? original
+                                : kind == RunKind.REVIEW
+                                ? "You are addressing review feedback on " + (t.getPullRequest() == null ? "the pull request"
+                                        : t.getPullRequest().url()) + " for ticket " + t.getId() + ": " + t.getTitle()
+                                        + ". Read the pull request's comments with the MCP tools if available."
+                                : PromptBuilder.initial(t, p, tools);
+                        return PromptBuilder.recoveryFresh(basePrompt, t, recapText, gitText);
+                    }
                     if (!resume) {
                         return kind == RunKind.REVIEW
                                 ? PromptBuilder.review(t, p, review.comments(), review.newSince())
@@ -420,46 +532,84 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
                     return PromptBuilder.initial(t, p, tools)
                             + "\n## Additional guidance from a human\n" + answer.strip() + "\n";
                 });
+                try {
+                    journal = RunJournal.create(store.runsDir(ticketId), kind, request.prompt());
+                } catch (IOException e) {
+                    throw new JunoException("Could not create the run journal: " + e.getMessage(), e);
+                }
+                previousRun = t.getActiveRun();
+                RunJournal.event(journal, "start", "mode", mode, "kind", kind.name(),
+                        "session", session == null ? "" : session, "workDir", prepared.worktree().toString());
+                t.setActiveRun(new ActiveRun(kind, mode, session, Instant.now().toString(), journal.toString(),
+                        recovery == null || recovery.sourceJournal() == null ? null
+                                : recovery.sourceJournal().toString(), 0));
+                persist();
+                journals.put(ticketId, journal);
             }
-            launch(request, kind == RunKind.REVIEW ? TicketStatus.AI_REVIEW : TicketStatus.WORKING);
+            log(ticketId, "[juno] journal: " + journal);
+            try {
+                launch(request, kind == RunKind.REVIEW ? TicketStatus.IN_AI_REVIEW : TicketStatus.WORKING);
+            } catch (JunoException e) {
+                synchronized (this) {
+                    journals.remove(ticketId);
+                    ticket(ticketId).ifPresent(t -> t.setActiveRun(previousRun));
+                    persist();
+                }
+                RunJournal.event(journal, "launch-failed", "error", String.valueOf(e.getMessage()));
+                throw e;
+            }
         } finally {
             synchronized (this) {
                 preparing.remove(ticketId);
             }
             fireChanged();
         }
-        openTerminalIfEnabled(ticketId);
+        openTerminalIfEnabled(ticketId, kind);
     }
 
     // ---- terminals --------------------------------------------------------------------------
 
-    private void openTerminalIfEnabled(String ticketId) {
+    private static String consoleVariant(RunKind kind) {
+        return kind == RunKind.REVIEW ? "review" : "";
+    }
+
+    private void openTerminalIfEnabled(String ticketId, RunKind kind) {
         JunoSettings s = settings();
         if (consoles == null || !s.isOpenTerminals()) {
             return;
         }
         try {
-            consoles.ensureOpen(ticketId, s.getTerminalCommand());
+            consoles.ensureOpen(ticketId, consoleVariant(kind), s.getTerminalCommand());
         } catch (IOException e) {
             log(ticketId, "[juno] could not open a terminal: " + e.getMessage());
         }
     }
 
-    /** Brings the ticket's agent terminal to the front, opening one if it isn't running. */
+    /**
+     * Brings the terminal for the ticket's current (or last) run to the front, opening one if it isn't running.
+     * Work runs and AI review runs have separate terminals.
+     */
     public String showTerminal(String ticketId) throws JunoException {
         if (consoles == null) {
             throw new JunoException("The agent console is unavailable (see Juno's startup output)");
         }
-        require(ticketId);
+        RunKind kind;
+        synchronized (this) {
+            kind = require(ticketId).getRunKind();
+        }
         try {
-            return consoles.show(ticketId, settings().getTerminalCommand());
+            return consoles.show(ticketId, consoleVariant(kind), settings().getTerminalCommand());
         } catch (IOException e) {
             throw new JunoException("Could not open a terminal: " + e.getMessage(), e);
         }
     }
 
     public boolean isTerminalOpen(String ticketId) {
-        return consoles != null && consoles.isOpen(ticketId);
+        RunKind kind;
+        synchronized (this) {
+            kind = ticket(ticketId).map(Ticket::getRunKind).orElse(RunKind.WORK);
+        }
+        return consoles != null && consoles.isOpen(AgentConsoles.key(ticketId, consoleVariant(kind)));
     }
 
     /** Backend for the agent consoles. */
@@ -569,8 +719,9 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
             t.touch();
             persist();
         }
+        long pid;
         try {
-            runner.start(request);
+            pid = runner.start(request);
         } catch (IOException | IllegalStateException e) {
             synchronized (this) {
                 ticket(request.ticketId()).ifPresent(t -> {
@@ -581,6 +732,16 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
             }
             fireChanged();
             throw new JunoException(e.getMessage(), e);
+        }
+        synchronized (this) {
+            ticket(request.ticketId()).ifPresent(t -> {
+                t.setInterrupted(false);
+                t.setDeliveryPending(false);
+                if (t.getActiveRun() != null) {
+                    t.setActiveRun(t.getActiveRun().withPid(pid));
+                }
+            });
+            persist();
         }
         fireChanged();
     }
@@ -594,6 +755,12 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
     @Override
     public void finished(String ticketId, AgentOutcome outcome) {
         boolean deliver = false;
+        Recovery fallback = null;
+        Path journal = journals.remove(ticketId);
+        if (journal != null) {
+            RunJournal.event(journal, "finish", "outcome", outcome.kind().name(),
+                    "message", outcome.message() == null ? "" : outcome.message());
+        }
         synchronized (this) {
             Optional<Ticket> found = board.getTickets().stream().filter(t -> t.getId().equals(ticketId)).findFirst();
             if (found.isEmpty()) {
@@ -601,9 +768,25 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
             }
             Ticket t = found.get();
             RunKind kind = t.getRunKind();
+            ActiveRun run = t.getActiveRun();
+            t.setActiveRun(null);
+            if (run != null) {
+                t.setLastJournal(run.journal());
+            }
             if (outcome.sessionId() != null) {
                 t.setAgentSessionId(outcome.sessionId());
             }
+            // Resuming the interrupted session failed before it started (e.g. the session is gone): fall back to a
+            // fresh session that gets the original prompt plus the recap.
+            if (run != null && "recovery-resume".equals(run.mode())
+                    && outcome.kind() == AgentOutcome.Kind.FAILED && outcome.sessionId() == null) {
+                fallback = new Recovery(null, run.recoveredFrom() == null ? null : Path.of(run.recoveredFrom()));
+                t.setInterrupted(true);
+                t.setActiveRun(run.withSessionId(null));
+                t.touch();
+                persist();
+            }
+            if (fallback == null) {
             switch (outcome.kind()) {
                 case COMPLETED -> {
                     if (kind == RunKind.REVIEW) {
@@ -617,7 +800,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
                         deliver = true;
                         delivering.add(ticketId);
                     } else {
-                        t.setStatus(TicketStatus.AI_REVIEW);
+                        t.setStatus(TicketStatus.REVIEW);
                     }
                 }
                 case NEEDS_DECISION -> {
@@ -630,16 +813,59 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
                             + "\n\nReply with guidance to retry, or move the ticket elsewhere.");
                 }
                 case CANCELLED -> {
-                    t.setStatus(kind == RunKind.REVIEW ? TicketStatus.AI_REVIEW : TicketStatus.PENDING);
+                    t.setStatus(kind == RunKind.REVIEW ? TicketStatus.REVIEW : TicketStatus.PENDING);
                     t.setPendingQuestion(null);
                 }
             }
             t.touch();
             persist();
+            }
         }
         fireChanged();
         if (deliver) {
             Thread.ofPlatform().daemon().name("deliver-" + ticketId).start(() -> deliver(ticketId));
+        }
+        if (fallback != null) {
+            Recovery recovery = fallback;
+            log(ticketId, "[juno] the interrupted session could not be resumed; starting a new session from the journal");
+            Thread.ofPlatform().daemon().name("recover-" + ticketId).start(() -> {
+                try {
+                    beginRun(ticketId, kindOf(ticketId), null, null, recovery);
+                } catch (JunoException e) {
+                    log(ticketId, "[juno] could not resume: " + e.getMessage());
+                    fireChanged();
+                }
+            });
+        }
+    }
+
+    private synchronized RunKind kindOf(String ticketId) {
+        return ticket(ticketId).map(Ticket::getRunKind).orElse(RunKind.WORK);
+    }
+
+    @Override
+    public void raw(String ticketId, String line) {
+        Path journal = journals.get(ticketId);
+        RunJournal.append(journal, line);
+        // Persist the Claude session id as soon as the agent reports it, so an interruption can resume it.
+        if (line.contains("\"init\"") && line.contains("session_id")) {
+            try {
+                com.fasterxml.jackson.databind.JsonNode event = store.mapper().readTree(line);
+                String sid = event.path("session_id").asText(null);
+                if ("system".equals(event.path("type").asText()) && sid != null) {
+                    synchronized (this) {
+                        ticket(ticketId).ifPresent(t -> {
+                            t.setAgentSessionId(sid);
+                            if (t.getActiveRun() != null) {
+                                t.setActiveRun(t.getActiveRun().withSessionId(sid));
+                            }
+                        });
+                        persist();
+                    }
+                }
+            } catch (IOException ignored) {
+                // not JSON
+            }
         }
     }
 
@@ -670,6 +896,8 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
             }
             kind = t.get().getRunKind();
             delivering.add(ticketId);
+            t.get().setDeliveryPending(true);
+            persist();
         }
         fireChanged();
         try {
@@ -692,7 +920,11 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
             }
             log(ticketId, "[juno] " + e.getMessage());
         } finally {
-            delivering.remove(ticketId);
+            synchronized (this) {
+                delivering.remove(ticketId);
+                ticket(ticketId).ifPresent(t -> t.setDeliveryPending(false));
+                persist();
+            }
             fireChanged();
         }
     }
@@ -744,13 +976,13 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
             }
             t.setPullRequest(pr);
             t.setPullRequestError(null);
-            t.setStatus(TicketStatus.AI_REVIEW);
+            t.setStatus(TicketStatus.REVIEW);
             t.setPendingQuestion(null);
             t.touch();
             persist();
         }
         log(ticketId, "[juno] " + kind.pullRequestNoun() + " " + pr.display() + ": " + pr.url());
-        log(ticketId, "[juno] moved to AI review");
+        log(ticketId, "[juno] moved to Review");
     }
 
     private void pushReview(String ticketId) throws JunoException, GitException, McpException {
@@ -796,12 +1028,13 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
             t.setLastReviewAt((started == null ? Instant.now() : started).toString());
             t.setReviewCount(t.getReviewCount() + 1);
             t.setPullRequestError(null);
-            t.setStatus(TicketStatus.AI_REVIEW);
+            t.setStatus(TicketStatus.REVIEW);
             t.setPendingQuestion(null);
             t.touch();
             persist();
         }
-        log(ticketId, "[juno] posted the review summary on " + pr.display());
+        log(ticketId, "[juno] posted the review summary on " + pr.display() + "; AI review " + t.getReviewCount()
+                + " complete, moved back to Review");
     }
 
     /**
@@ -845,12 +1078,21 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         return "";
     }
 
+    /**
+     * On start-up, any ticket that was mid-run or mid-push when Juno last stopped (closed, crashed, computer
+     * restarted) is marked interrupted. It stays in its column, greyed out, until Resume picks it up again.
+     */
     private void recoverInterruptedWork() {
         boolean changed = false;
         for (Ticket t : board.getTickets()) {
-            if (t.getStatus() == TicketStatus.WORKING) {
-                t.setStatus(TicketStatus.AWAITING_DECISION);
-                t.setPendingQuestion(INTERRUPTED_QUESTION);
+            boolean midRun = t.getActiveRun() != null || t.isDeliveryPending()
+                    || t.getStatus() == TicketStatus.WORKING || t.getStatus() == TicketStatus.IN_AI_REVIEW;
+            if (midRun && !t.isInterrupted()) {
+                t.setInterrupted(true);
+                if (t.getActiveRun() != null && t.getActiveRun().journal() != null) {
+                    RunJournal.event(Path.of(t.getActiveRun().journal()), "interrupted",
+                            "detectedAt", "Juno start-up");
+                }
                 changed = true;
             }
         }

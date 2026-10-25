@@ -25,7 +25,8 @@ final class DecisionDialog extends Dialog<DecisionDialog.Decision> {
         setResizable(true);
 
         ButtonType resume = new ButtonType("Resume agent", ButtonBar.ButtonData.OK_DONE);
-        ButtonType pending = new ButtonType("Move back to Pending", ButtonBar.ButtonData.LEFT);
+        ButtonType pending = new ButtonType(ticket.getRunKind() == dev.juno.main.model.RunKind.REVIEW
+                ? "Move back to Review" : "Move back to Pending", ButtonBar.ButtonData.LEFT);
         getDialogPane().getButtonTypes().addAll(resume, pending, ButtonType.CANCEL);
 
         TextArea question = new TextArea(ticket.getPendingQuestion() == null ? "" : ticket.getPendingQuestion());

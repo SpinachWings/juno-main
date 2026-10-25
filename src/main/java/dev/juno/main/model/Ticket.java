@@ -39,6 +39,14 @@ public final class Ticket {
     private String lastReviewSummary;
     /** How many AI reviews have completed. */
     private int reviewCount;
+    /** The run in progress (persisted so an interrupted run can be resumed), or null. */
+    private ActiveRun activeRun;
+    /** True when a run or a push was cut short (Juno closed, crash, restart) and can be resumed. */
+    private boolean interrupted;
+    /** True while Juno is pushing the branch / opening the PR / posting the review. */
+    private boolean deliveryPending;
+    /** Journal of the most recent finished run. */
+    private String lastJournal;
 
     /** Claude Code session id of the most recent agent run, used to resume after a decision. */
     private String agentSessionId;
@@ -213,6 +221,38 @@ public final class Ticket {
 
     public void setReviewCount(int reviewCount) {
         this.reviewCount = reviewCount;
+    }
+
+    public ActiveRun getActiveRun() {
+        return activeRun;
+    }
+
+    public void setActiveRun(ActiveRun activeRun) {
+        this.activeRun = activeRun;
+    }
+
+    public boolean isInterrupted() {
+        return interrupted;
+    }
+
+    public void setInterrupted(boolean interrupted) {
+        this.interrupted = interrupted;
+    }
+
+    public boolean isDeliveryPending() {
+        return deliveryPending;
+    }
+
+    public void setDeliveryPending(boolean deliveryPending) {
+        this.deliveryPending = deliveryPending;
+    }
+
+    public String getLastJournal() {
+        return lastJournal;
+    }
+
+    public void setLastJournal(String lastJournal) {
+        this.lastJournal = lastJournal;
     }
 
     /** Whether work has started, which fixes the base and branch names. */
