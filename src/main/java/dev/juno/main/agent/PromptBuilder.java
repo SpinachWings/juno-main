@@ -29,6 +29,12 @@ public final class PromptBuilder {
             sb.append("## Instructions from the person who assigned this ticket\n")
                     .append(ticket.getInitialInstructions().strip()).append("\n\n");
         }
+        if (ticket.isDesignDocApproved() && !ticket.getDesignDoc().isBlank()) {
+            sb.append("## Approved design doc\n")
+                    .append("Implement the ticket according to this design. If you find it can't work as written, ")
+                    .append("stop and ask (decision line) rather than silently diverging.\n\n")
+                    .append(ticket.getDesignDoc().strip()).append("\n\n");
+        }
 
         StringBuilder links = new StringBuilder();
         for (TrackerKind kind : TrackerKind.values()) {
@@ -51,7 +57,52 @@ public final class PromptBuilder {
         return sb.toString();
     }
 
+    /** Design run: a conversation with the human that ends in an approved design doc; no code changes. */
+    public static String design(Ticket ticket, Project project, boolean trackerToolsAvailable) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("You are a senior software engineer writing a design doc for ticket ").append(ticket.getId())
+                .append(" in the ").append(project.getName())
+                .append(" repository (your current working directory), together with a human.\n\n");
+        sb.append("# ").append(ticket.getId()).append(": ").append(ticket.getTitle()).append("\n\n");
+        sb.append(ticket.getDescription().isBlank() ? "(no description provided)" : ticket.getDescription().strip())
+                .append("\n\n");
+        if (!ticket.getInitialInstructions().isBlank()) {
+            sb.append("## Instructions from the person who assigned this ticket\n")
+                    .append(ticket.getInitialInstructions().strip()).append("\n\n");
+        }
+        if (!ticket.getDesignDoc().isBlank()) {
+            sb.append("## Existing draft to start from\n").append(ticket.getDesignDoc().strip()).append("\n\n");
+        }
+        sb.append("""
+                ## Process
+                - Read the relevant parts of the codebase to understand the current design and constraints. Do NOT
+                  modify files, run destructive commands or commit anything: this phase only produces a document.
+                - This is a conversation. If you need answers before you can write a good design, ask them: put your
+                  questions together (numbered) and make the LAST line of your reply exactly:
+                  %1$s <one-line summary of what you need decided>
+                - When you are ready, reply with the complete design doc wrapped exactly like this:
+                  %2$s
+                  ...the full design doc...
+                  %3$s
+                  Suggested sections: Summary; Goals and non-goals; Current state; Proposed design (components,
+                  data model, APIs, UI); Alternatives considered; Risks and open questions; Testing plan; Rollout
+                  and migration; Task breakdown.
+                - The human then approves the doc or asks for changes. When asked for changes, reply with the FULL
+                  revised doc in the same tags (never just a diff).
+                - If skills are available that match this work (e.g. brainstorming or writing plans), you may use
+                  them, but follow this process and the output format above.
+                """.formatted(StreamJsonParser.DECISION_MARKER, DesignDocs.OPEN, DesignDocs.CLOSE));
+        return sb.toString();
+    }
+
     public static String resume(Ticket ticket, String answer) {
+        if (ticket.getRunKind() == RunKind.DESIGN) {
+            return "Reply from the human about the design for ticket " + ticket.getId() + ":\n\n" + answer.strip()
+                    + "\n\nContinue the design conversation. Ask further questions with the "
+                    + StreamJsonParser.DECISION_MARKER + " line if needed; otherwise reply with the FULL updated "
+                    + "design doc wrapped in " + DesignDocs.OPEN + " ... " + DesignDocs.CLOSE
+                    + ". Do not modify any files.";
+        }
         String rest = ticket.getRunKind() == RunKind.REVIEW
                 ? "Continue addressing the review feedback with this decision. Same rules as before: commit to `"
                         + ticket.getBranchName() + "`, do not push, and end with a summary (or the "
@@ -111,7 +162,8 @@ public final class PromptBuilder {
                 - Build the code and run the relevant tests where possible.
                 - You are on branch `%1$s` (the pull request's branch, already up to date). Commit your changes to it
                   with clear messages. Do not switch branches, rebase, push or comment on the pull request yourself:
-                  Juno pushes your commits to the %2$s and posts your summary there.
+                  Juno pushes your commits to the %2$s. Never merge, approve or close it: a human does that.
+                  Skills may help, but these rules win over any skill.
                 - When you have finished, reply with a concise summary listing each comment and how you handled it.
                 - If you cannot proceed without a decision from a human, stop and make the LAST line of your final
                   reply exactly:
@@ -137,10 +189,15 @@ public final class PromptBuilder {
                 ## Continue
                 Pick up exactly where you left off. Re-check anything that may have been cut short (a file edit, a \
                 command or build that was running, a commit that may not have happened) before moving on, and \
-                don't redo work that is already done. The same rules as before apply: commit to `%3$s`, don't push \
-                or switch branches, and finish with your summary (or the %5$s line if you need a decision).
+                don't redo work that is already done. %5$s
                 """.formatted(ticket.getId(), recap, ticket.getBranchName(), gitState,
-                StreamJsonParser.DECISION_MARKER);
+                ticket.getRunKind() == RunKind.DESIGN
+                        ? "You were writing a design doc: don't modify files; ask questions with the "
+                                + StreamJsonParser.DECISION_MARKER + " line or reply with the full doc in "
+                                + DesignDocs.OPEN + " ... " + DesignDocs.CLOSE + "."
+                        : "The same rules as before apply: commit to `" + ticket.getBranchName() + "`, don't push "
+                                + "or switch branches, never merge, and finish with your summary (or the "
+                                + StreamJsonParser.DECISION_MARKER + " line if you need a decision).");
     }
 
     /**
@@ -179,7 +236,9 @@ public final class PromptBuilder {
                 - Commit your work to this branch as you go, with clear commit messages.
                 - Do not switch branches, rebase onto other branches, push, or open pull requests yourself. When you
                   finish, Juno pushes `%1$s` and opens a pull request into `%2$s` with your summary as its
-                  description.
+                  description. Never merge anything: merging is always done by a human.
+                - Skills may be available. Use them where they help, but these rules win over any skill (e.g. one
+                  that suggests merging, pushing, creating worktrees or switching branches).
 
                 ## How to work
                 - Implement the ticket fully, following the repository's existing conventions.

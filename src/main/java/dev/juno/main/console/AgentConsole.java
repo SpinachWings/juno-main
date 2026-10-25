@@ -44,6 +44,8 @@ public final class AgentConsole {
     /** The question currently awaiting an answer, or null. */
     private volatile String awaiting;
     private final StringBuilder answer = new StringBuilder();
+    /** Hash of the design doc last printed, so a new draft is shown once. */
+    private volatile int printedDoc;
 
     private AgentConsole(int port, String token, String ticket, String consoleKey) {
         this.base = "http://127.0.0.1:" + port + "/api/";
@@ -139,6 +141,20 @@ public final class AgentConsole {
         String label = state.path("statusLabel").asText(status);
         String question = state.hasNonNull("question") ? state.get("question").asText() : null;
         boolean waiting = "AWAITING_DECISION".equals(status) && question != null;
+        boolean designReview = state.path("designReview").asBoolean(false);
+        String doc = state.hasNonNull("designDoc") ? state.get("designDoc").asText() : null;
+        if (designReview && doc != null && doc.hashCode() != printedDoc) {
+            printedDoc = doc.hashCode();
+            out.println();
+            out.println(RULE);
+            out.println(" DESIGN DOC DRAFT - " + ticket);
+            out.println(RULE);
+            doc.lines().forEach(l -> out.println(" " + l));
+            out.println(RULE);
+            out.println(" /approve  approve it and start implementation");
+            out.println(" /export   save it as a .txt file in the design doc folder");
+            out.println(" or type the changes you want (finish with an empty line)");
+        }
 
         boolean announced = false;
         synchronized (inputLock) {
@@ -188,6 +204,33 @@ public final class AgentConsole {
     }
 
     private void onInputLine(String line) {
+        String command = line.strip().toLowerCase(java.util.Locale.ROOT);
+        if (command.equals("/export")) {
+            try {
+                JsonNode result = post("design/export?ticket=" + enc(ticket), "");
+                out.println(result.has("error") ? "[juno] Could not export: " + result.get("error").asText()
+                        : "[juno] Design doc saved to " + result.path("path").asText());
+            } catch (IOException | InterruptedException e) {
+                out.println("[juno] Could not reach Juno: " + e.getMessage());
+            }
+            return;
+        }
+        if (command.equals("/help")) {
+            out.println("[juno] Type an answer and finish with an empty line. Commands: /approve (design doc), "
+                    + "/export (design doc as .txt), /help");
+            return;
+        }
+        if (command.equals("/approve")) {
+            synchronized (inputLock) {
+                if (awaiting == null) {
+                    out.println("[juno] Nothing is waiting for approval right now.");
+                    return;
+                }
+                answer.setLength(0);
+            }
+            send("/approve");
+            return;
+        }
         String toSend = null;
         synchronized (inputLock) {
             if (awaiting == null) {
@@ -210,6 +253,10 @@ public final class AgentConsole {
             toSend = answer.toString().strip();
             answer.setLength(0);
         }
+        send(toSend);
+    }
+
+    private void send(String toSend) {
         try {
             JsonNode result = post("answer?ticket=" + enc(ticket), toSend);
             if (result.has("error")) {

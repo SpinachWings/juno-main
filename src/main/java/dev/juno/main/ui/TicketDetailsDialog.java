@@ -16,6 +16,7 @@ import javafx.geometry.Pos;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonBar;
 import javafx.scene.control.ButtonType;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.Hyperlink;
@@ -62,6 +63,10 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
     private final TextField title = new TextField();
     private final TextArea description = new TextArea();
     private final TextArea instructions = new TextArea();
+    private final CheckBox generateDesign = new CheckBox("Generate design doc (for more complex features)");
+    private final TextArea designDoc = new TextArea();
+    private final Label designStatus = new Label();
+    private final Button exportDesign = new Button("Export .txt");
     private final TextField baseBranch = new TextField();
     private final TextField branchName = new TextField();
     private final Label branchHint = new Label();
@@ -186,6 +191,23 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         GridPane.setValignment(instructionsLabel, javafx.geometry.VPos.TOP);
         form.addRow(6, instructionsLabel, instructions);
 
+        designDoc.setPromptText("Leave empty to write the design doc with the agent (a back-and-forth conversation "
+                + "in the terminal or Awaiting decision), or paste / write your own here to use it as-is.");
+        designDoc.setWrapText(true);
+        designDoc.setPrefRowCount(6);
+        designStatus.getStyleClass().add("hint");
+        designStatus.setWrapText(true);
+        exportDesign.setOnAction(e -> exportDesignDoc());
+        HBox designActions = new HBox(8, exportDesign, designStatus);
+        designActions.setAlignment(Pos.CENTER_LEFT);
+        generateDesign.selectedProperty().addListener((obs, old, on) -> {
+            designDoc.setDisable(!on && designDoc.getText().isBlank());
+        });
+        VBox designBox = new VBox(6, generateDesign, designDoc, designActions);
+        Label designLabel = new Label("Design doc");
+        GridPane.setValignment(designLabel, javafx.geometry.VPos.TOP);
+        form.addRow(7, designLabel, designBox);
+
         VBox links = new VBox(4);
         for (TrackerKind kind : TrackerKind.values()) {
             HBox row = new HBox(6);
@@ -195,7 +217,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         }
         pullRequestRow.setAlignment(Pos.CENTER_LEFT);
         links.getChildren().add(pullRequestRow);
-        form.addRow(7, new Label("Linked issues"), links);
+        form.addRow(8, new Label("Linked issues"), links);
 
         // The sync "menu".
         Label menuTitle = new Label("Sync");
@@ -248,6 +270,10 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
             title.setText(ticket.getTitle());
             description.setText(ticket.getDescription());
             instructions.setText(ticket.getInitialInstructions());
+            generateDesign.setSelected(ticket.isGenerateDesignDoc());
+            designDoc.setText(ticket.getDesignDoc());
+            designDoc.setDisable(!ticket.isGenerateDesignDoc() && ticket.getDesignDoc().isBlank());
+            refreshDesignStatus();
             baseBranch.setText(ticket.getBaseBranch());
             branchName.setText(ticket.getBranchName());
             boolean locked = ticket.isBranchLocked();
@@ -379,6 +405,39 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         }
     }
 
+    private void refreshDesignStatus() {
+        String text;
+        if (ticket.getDesignDoc().isBlank()) {
+            text = generateDesign.isSelected() ? "Start will open a design conversation with the agent first."
+                    : "No design doc.";
+        } else if (ticket.isDesignDocApproved()) {
+            text = "user".equals(ticket.getDesignDocSource()) ? "Your design doc: used as-is for implementation."
+                    : "Approved: implementation follows this design.";
+        } else {
+            text = "Draft from the agent, awaiting your approval (Respond on the card, or /approve in the terminal).";
+        }
+        if (ticket.getDesignDocFile() != null) {
+            text += "\nLast exported to " + ticket.getDesignDocFile();
+        }
+        designStatus.setText(text);
+        exportDesign.setDisable(ticket.getDesignDoc().isBlank() && designDoc.getText().isBlank());
+    }
+
+    private void exportDesignDoc() {
+        if (!confirmProjectChange()) {
+            return;
+        }
+        applyEdits();
+        setBusy(true, "Exporting design doc…");
+        Fx.async(() -> service.exportDesignDoc(ticket.getId()), path -> {
+            setBusy(false, "Design doc saved to " + path);
+            refreshDesignStatus();
+        }, err -> {
+            setBusy(false, "Export failed.");
+            Fx.error(getDialogPane().getScene().getWindow(), "Could not export the design doc", err);
+        });
+    }
+
     /** Quick sanity check of the branch fields (git validates them fully when work starts). */
     private String branchProblem() {
         if (ticket.isBranchLocked()) {
@@ -408,6 +467,14 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         ticket.setTitle(title.getText().strip());
         ticket.setDescription(description.getText());
         ticket.setInitialInstructions(instructions.getText());
+        ticket.setGenerateDesignDoc(generateDesign.isSelected());
+        String doc = designDoc.getText() == null ? "" : designDoc.getText();
+        if (!doc.strip().equals(ticket.getDesignDoc().strip())) {
+            // A doc typed or edited here is the user's own: it is used as-is (approved).
+            ticket.setDesignDoc(doc);
+            ticket.setDesignDocSource(doc.isBlank() ? null : "user");
+            ticket.setDesignDocApproved(!doc.isBlank());
+        }
         if (!ticket.isBranchLocked()) {
             ticket.setBaseBranch(baseBranch.getText());
             ticket.setBranchName(branchName.getText());

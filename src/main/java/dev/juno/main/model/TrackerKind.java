@@ -52,11 +52,6 @@ public enum TrackerKind {
         return this == GITLAB ? "get_merge_request_comments" : "get_pull_request_comments";
     }
 
-    /** MCP tool adding a comment to a pull/merge request. */
-    public String pullRequestCommentTool() {
-        return this == GITLAB ? "add_merge_request_comment" : "add_comment";
-    }
-
     /** Human description of what a location looks like for this tracker. */
     public String locationHint() {
         return this == GITLAB ? "group/project" : "owner/repo";

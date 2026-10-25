@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import dev.juno.main.agent.AgentOutcome;
 import dev.juno.main.agent.AgentRunner;
+import dev.juno.main.agent.DesignDocs;
 import dev.juno.main.agent.PromptBuilder;
 import dev.juno.main.agent.RunJournal;
 import dev.juno.main.console.AgentConsoles;
@@ -23,10 +24,12 @@ import dev.juno.main.model.Organisation;
 import dev.juno.main.model.Project;
 import dev.juno.main.model.PullRequestRef;
 import dev.juno.main.model.RunKind;
+import dev.juno.main.model.SkillEntry;
 import dev.juno.main.model.Ticket;
 import dev.juno.main.model.TicketStatus;
 import dev.juno.main.model.TrackerKind;
 import dev.juno.main.store.JunoStore;
+import dev.juno.main.skills.SkillLibrary;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -75,6 +78,8 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
     private final Map<String, Path> journals = new ConcurrentHashMap<>();
     /** Terminal consoles; null if the local console server could not start. */
     private final AgentConsoles consoles;
+    /** Skill library (uploads and bundled packs). */
+    private final SkillLibrary skills;
 
     public BoardService(JunoStore store) {
         this.store = store;
@@ -82,6 +87,10 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         this.board = store.loadBoard();
         this.runner = new AgentRunner(this);
         this.trackers = new IssueTrackerService(this::settings, this::trackerLog);
+        this.skills = new SkillLibrary(store.home());
+        if (skills.installBundled(settings)) {
+            store.saveSettings(settings);
+        }
         recoverInterruptedWork();
         AgentConsoles c;
         try {
@@ -153,6 +162,10 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
 
     public JunoStore store() {
         return store;
+    }
+
+    public SkillLibrary skillLibrary() {
+        return skills;
     }
 
     /** Recent stderr output from the MCP servers, for troubleshooting. */
@@ -279,7 +292,61 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
      * the resolved agent there with the ticket and its initial instructions as the prompt.
      */
     public void startWork(String ticketId) throws JunoException {
+        RunKind kind = RunKind.WORK;
+        synchronized (this) {
+            Ticket t = require(ticketId);
+            if (t.isGenerateDesignDoc() && !t.isDesignDocApproved()) {
+                if (!t.getDesignDoc().isBlank() && "user".equals(t.getDesignDocSource())) {
+                    // The user supplied their own design doc: use it as-is.
+                    t.setDesignDocApproved(true);
+                    persist();
+                } else {
+                    kind = RunKind.DESIGN;
+                }
+            }
+        }
+        beginRun(ticketId, kind, null, null, null);
+    }
+
+    /** Approves the ticket's design doc and starts implementing it. */
+    public void approveDesign(String ticketId) throws JunoException {
+        synchronized (this) {
+            Ticket t = require(ticketId);
+            if (t.getDesignDoc().isBlank()) {
+                throw new JunoException(ticketId + " has no design doc to approve");
+            }
+            t.setDesignDocApproved(true);
+            t.setPendingQuestion(null);
+            t.touch();
+            persist();
+        }
+        log(ticketId, "");
+        log(ticketId, "=== Design doc approved; starting implementation ===");
         beginRun(ticketId, RunKind.WORK, null, null, null);
+    }
+
+    /** Writes the ticket's design doc to the design doc folder as a .txt file and returns its path. */
+    public Path exportDesignDoc(String ticketId) throws JunoException {
+        Ticket t;
+        String projectName;
+        Path folder;
+        synchronized (this) {
+            t = require(ticketId);
+            projectName = projectOf(t).map(Project::getName).orElse(null);
+            folder = Path.of(settings.getDesignDocFolder());
+        }
+        try {
+            Path file = DesignDocs.export(t, projectName, folder);
+            synchronized (this) {
+                t.setDesignDocFile(file.toString());
+                persist();
+            }
+            log(ticketId, "[juno] design doc exported to " + file);
+            fireChanged();
+            return file;
+        } catch (IOException e) {
+            throw new JunoException("Could not export the design doc: " + e.getMessage(), e);
+        }
     }
 
     /** Answers an agent's question (or retries after a failure / interruption) and resumes its session. */
@@ -294,6 +361,10 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
                 throw new JunoException(ticketId + " is not waiting for a decision");
             }
             kind = t.getRunKind();
+        }
+        if (kind == RunKind.DESIGN && DesignDocs.isApproval(answer)) {
+            approveDesign(ticketId);
+            return;
         }
         beginRun(ticketId, kind, answer, null, null);
     }
@@ -430,6 +501,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
     private void beginRun(String ticketId, RunKind kind, String answer, ReviewInput review, Recovery recovery)
             throws JunoException {
         boolean resume = answer != null;
+        List<SkillEntry> packs;
         Path repo;
         Path worktree;
         String base;
@@ -449,6 +521,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
                 persist();
             }
             repo = Path.of(project.getPath());
+            packs = List.copyOf(settings.skillsFor(project));
             worktree = t.getWorktreePath() != null
                     ? Path.of(t.getWorktreePath())
                     : store.home().resolve("worktrees").resolve(safeName(t.getId()));
@@ -472,6 +545,19 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
                 log(ticketId, "[juno] " + e.getMessage());
                 throw new JunoException("Could not prepare the ticket's branch: " + e.getMessage(), e);
             }
+            // Skills that apply to this ticket (global, its organisation, its project) go into the worktree.
+            List<String> skillNames = List.of();
+            try {
+                git(ticketId).exclude(prepared.worktree(), "/.claude/skills/" + SkillLibrary.WORKTREE_PREFIX + "*/");
+                skillNames = SkillLibrary.materialise(prepared.worktree(), packs);
+                if (!skillNames.isEmpty()) {
+                    log(ticketId, "[juno] skills available to the agent: " + String.join(", ", skillNames));
+                }
+            } catch (IOException | GitException e) {
+                log(ticketId, "[juno] could not set up skills: " + e.getMessage());
+            }
+            boolean haveSkills = !skillNames.isEmpty();
+
             // For recovery: what the interrupted run did, and where the branch stands now.
             String recap = null;
             String gitState = null;
@@ -507,7 +593,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
                 String session = recovery != null ? recovery.sessionId() : resume ? t.getAgentSessionId() : null;
                 String mode = recovery != null ? (session != null ? "recovery-resume" : "recovery-fresh")
                         : resume ? "resume" : "fresh";
-                request = buildRequest(t, session, prepared.worktree(), tools -> {
+                request = buildRequest(t, session, prepared.worktree(), haveSkills, tools -> {
                     Project p = requireProjectUnchecked(t);
                     if (recovery != null) {
                         if (session != null) {
@@ -522,9 +608,11 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
                         return PromptBuilder.recoveryFresh(basePrompt, t, recapText, gitText);
                     }
                     if (!resume) {
-                        return kind == RunKind.REVIEW
-                                ? PromptBuilder.review(t, p, review.comments(), review.newSince())
-                                : PromptBuilder.initial(t, p, tools);
+                        return switch (kind) {
+                            case REVIEW -> PromptBuilder.review(t, p, review.comments(), review.newSince());
+                            case DESIGN -> PromptBuilder.design(t, p, tools);
+                            case WORK -> PromptBuilder.initial(t, p, tools);
+                        };
                     }
                     if (session != null) {
                         return PromptBuilder.resume(t, answer);
@@ -624,7 +712,8 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
                             runner.isRunning(ticketId) || preparing.contains(ticketId),
                             delivering.contains(ticketId),
                             t.getPullRequest() == null ? null : t.getPullRequest().url(),
-                            t.getBranchName()));
+                            t.getBranchName(), t.isDesignAwaitingApproval(),
+                            t.getDesignDoc().isBlank() ? null : t.getDesignDoc()));
                 }
             }
 
@@ -636,6 +725,11 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
             @Override
             public void answer(String ticketId, String answer) throws JunoException {
                 respond(ticketId, answer);
+            }
+
+            @Override
+            public String exportDesignDoc(String ticketId) throws JunoException {
+                return BoardService.this.exportDesignDoc(ticketId).toString();
             }
         };
     }
@@ -669,7 +763,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
     }
 
     /** Resolves project, organisation and agent for a run. Caller holds the lock. */
-    private AgentRunner.Request buildRequest(Ticket t, String resumeSession, Path workDir,
+    private AgentRunner.Request buildRequest(Ticket t, String resumeSession, Path workDir, boolean skillsAvailable,
                                              java.util.function.Function<Boolean, String> prompt)
             throws JunoException {
         Project project = requireProject(t);
@@ -686,6 +780,10 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         if (extra != null && !extra.isBlank()) {
             String base = profile.getAllowedTools() == null ? "" : profile.getAllowedTools().strip();
             profile.setAllowedTools((base + " " + extra.strip()).strip());
+        }
+        if (skillsAvailable) {
+            String base = profile.getAllowedTools() == null ? "" : profile.getAllowedTools().strip();
+            profile.setAllowedTools((base + " Skill").strip());
         }
         Path mcpConfig = profile.isExposeTrackerMcp() ? writeAgentMcpConfig(t, org) : null;
         String label = "'" + agent.profile().getName() + "' (" + profile.getModel() + ", assigned on "
@@ -786,7 +884,29 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
                 t.touch();
                 persist();
             }
-            if (fallback == null) {
+            if (fallback == null && kind == RunKind.DESIGN
+                    && (outcome.kind() == AgentOutcome.Kind.COMPLETED || outcome.kind() == AgentOutcome.Kind.NEEDS_DECISION)) {
+                String doc = DesignDocs.extract(outcome.fullText());
+                if (doc != null) {
+                    t.setDesignDoc(doc);
+                    t.setDesignDocSource("agent");
+                    t.setDesignDocApproved(false);
+                }
+                t.setStatus(TicketStatus.AWAITING_DECISION);
+                if (outcome.kind() == AgentOutcome.Kind.NEEDS_DECISION) {
+                    t.setPendingQuestion(outcome.message()
+                            + (doc != null ? "\n\n(A draft design doc came with this question: see the terminal or Details.)" : ""));
+                } else if (doc != null) {
+                    t.setPendingQuestion("The design doc is ready for review. Approve it to start implementation "
+                            + "(/approve), or reply with the changes you want. Export it as .txt with /export in the "
+                            + "terminal, or from the ticket's Details.");
+                } else {
+                    t.setPendingQuestion("The agent finished without producing a design doc:\n" + outcome.message()
+                            + "\n\nReply to continue the design conversation.");
+                }
+                t.touch();
+                persist();
+            } else if (fallback == null) {
             switch (outcome.kind()) {
                 case COMPLETED -> {
                     if (kind == RunKind.REVIEW) {
@@ -795,7 +915,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
                         t.setLastSummary(outcome.message());
                     }
                     t.setPendingQuestion(null);
-                    if (t.getWorktreePath() != null) {
+                    if (t.getWorktreePath() != null && kind != RunKind.DESIGN) {
                         // Stay in Working (or AI review) until the branch is pushed; delivery moves it on.
                         deliver = true;
                         delivering.add(ticketId);
@@ -1018,11 +1138,10 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         } else {
             log(ticketId, "[juno] the review agent made no code changes");
         }
-        String comment = "### AI review\n\n" + summary + "\n\n"
-                + (ahead > 0 ? "_Pushed " + ahead + " commit(s) to `" + branch + "`._"
-                : "_No code changes were made._")
-                + "\n\n" + ReviewComment.JUNO_MARKER;
-        trackers.commentOnPullRequest(org, pr.tracker(), pr.location(), pr.number(), comment);
+        // The summary stays in Juno (card + log): commenting on the PR is not one of the permitted actions.
+        log(ticketId, "[juno] AI review summary: " + summary.replace('\n', ' '));
+        log(ticketId, ahead > 0 ? "[juno] pushed " + ahead + " commit(s) to " + pr.display()
+                : "[juno] nothing to push");
         synchronized (this) {
             Instant started = reviewStarts.remove(ticketId);
             t.setLastReviewAt((started == null ? Instant.now() : started).toString());
@@ -1033,8 +1152,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
             t.touch();
             persist();
         }
-        log(ticketId, "[juno] posted the review summary on " + pr.display() + "; AI review " + t.getReviewCount()
-                + " complete, moved back to Review");
+        log(ticketId, "[juno] AI review " + t.getReviewCount() + " complete, moved back to Review");
     }
 
     /**

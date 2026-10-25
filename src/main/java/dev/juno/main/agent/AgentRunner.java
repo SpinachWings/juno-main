@@ -216,6 +216,15 @@ public final class AgentRunner {
 
     // ---- command line -----------------------------------------------------------------------
 
+    /**
+     * Tool rules always denied to agents. Juno itself pushes branches and opens pull/merge requests; merging is
+     * only ever done by a human. (The MCP servers enforce the same rule on their side.)
+     */
+    public static final List<String> FORBIDDEN_TOOLS = List.of(
+            "Bash(git push:*)", "Bash(git merge:*)", "Bash(git rebase:*)",
+            "Bash(gh pr merge:*)", "Bash(gh pr review:*)", "Bash(gh pr close:*)", "Bash(gh api:*)",
+            "Bash(glab mr merge:*)", "Bash(glab mr approve:*)", "Bash(glab mr close:*)", "Bash(glab api:*)");
+
     public static List<String> buildCommand(AgentProfile s, String resumeSessionId, Path mcpConfig,
                                             boolean windows) {
         List<String> cmd = new ArrayList<>();
@@ -254,6 +263,9 @@ public final class AgentRunner {
             cmd.add("--resume");
             cmd.add(resumeSessionId.trim());
         }
+        // Hard guard, whatever the profile allows: agents never merge, push, or drive GitHub/GitLab directly.
+        cmd.add("--disallowedTools");
+        cmd.add(String.join(" ", FORBIDDEN_TOOLS));
         cmd.addAll(splitArgs(s.getExtraArgs()));
         return cmd;
     }

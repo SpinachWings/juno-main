@@ -348,10 +348,18 @@ public final class BoardView {
 
             @Override
             public void respond(Ticket t, Window owner) {
-                new DecisionDialog(owner, t).showAndWait().ifPresent(decision -> {
+                new DecisionDialog(owner, t, service).showAndWait().ifPresent(decision -> {
                     if (decision.backToPending()) {
                         move(t, t.getRunKind() == dev.juno.main.model.RunKind.REVIEW
                                 ? TicketStatus.REVIEW : TicketStatus.PENDING, owner);
+                        return;
+                    }
+                    if (decision.approveDesign()) {
+                        Fx.async(() -> {
+                            service.approveDesign(t.getId());
+                            return null;
+                        }, ok -> status("Design approved; implementation started on " + t.getId()),
+                                err -> Fx.error(owner, "Could not start " + t.getId(), err));
                         return;
                     }
                     Fx.async(() -> {
@@ -422,6 +430,15 @@ public final class BoardView {
                         + " will leave Review" + (t.getPullRequest() == null ? "."
                         : ". Its " + t.getPullRequest().tracker().pullRequestNoun() + " is not merged or closed by Juno."))) {
                     move(t, TicketStatus.DONE, owner);
+                }
+            }
+
+            @Override
+            public void reopen(Ticket t, Window owner) {
+                TicketStatus target = t.getPullRequest() != null ? TicketStatus.REVIEW : TicketStatus.PENDING;
+                if (Fx.confirm(owner, "Remove " + t.getId() + " from Done?",
+                        t.getId() + " goes back to " + target.label() + ".")) {
+                    move(t, target, owner);
                 }
             }
 

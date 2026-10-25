@@ -58,6 +58,8 @@ final class TicketCard {
         void resume(Ticket t, Window owner);
 
         void moveToDone(Ticket t, Window owner);
+
+        void reopen(Ticket t, Window owner);
     }
 
     private TicketCard() {
@@ -129,7 +131,9 @@ final class TicketCard {
             switch (ticket.getStatus()) {
                 case WORKING -> {
                     if (!delivering) {
-                        card.getChildren().add(progress(running ? "Agent working…" : "Agent not running"));
+                        card.getChildren().add(progress(!running ? "Agent not running"
+                                : ticket.getRunKind() == RunKind.DESIGN ? "Writing the design doc with the agent…"
+                                : "Agent working…"));
                     }
                 }
                 case IN_AI_REVIEW -> {
@@ -137,7 +141,8 @@ final class TicketCard {
                         card.getChildren().add(progress(running ? "AI review agent working…" : "Starting AI review…"));
                     }
                 }
-                case AWAITING_DECISION -> card.getChildren().add(excerpt(ticket.getPendingQuestion(), "card-question"));
+                case AWAITING_DECISION -> card.getChildren().add(excerpt(ticket.isDesignAwaitingApproval()
+                        ? "Design doc ready for your review." : ticket.getPendingQuestion(), "card-question"));
                 case REVIEW -> {
                     String last = ticket.getReviewCount() > 0 ? ticket.getLastReviewSummary() : ticket.getLastSummary();
                     if (last != null && !last.isBlank()) {
@@ -155,6 +160,12 @@ final class TicketCard {
             }
         }
 
+        if (ticket.isGenerateDesignDoc() || !ticket.getDesignDoc().isBlank()) {
+            Label design = new Label(ticket.getDesignDoc().isBlank() ? "Design doc: to be written first"
+                    : ticket.isDesignDocApproved() ? "Design doc: approved" : "Design doc: draft");
+            design.getStyleClass().add("card-agent");
+            card.getChildren().add(design);
+        }
         if (ticket.isBranchLocked()) {
             Label branch = new Label("Branch: " + ticket.getBranchName() + " -> " + ticket.getBaseBranch());
             branch.getStyleClass().add("card-agent");
@@ -223,7 +234,10 @@ final class TicketCard {
                     buttons.getChildren().addAll(terminal, logButton(ticket, actions), stop, details);
                 }
                 case AWAITING_DECISION -> {
-                    Button respond = button("Respond", "Answer the agent and resume its session",
+                    Button respond = button(ticket.isDesignAwaitingApproval() ? "Review design" : "Respond",
+                            ticket.isDesignAwaitingApproval()
+                                    ? "Read the design doc, approve it to start implementation, or ask for changes"
+                                    : "Answer the agent and resume its session",
                             b -> actions.respond(ticket, b.getScene().getWindow()));
                     respond.getStyleClass().add("accent");
                     buttons.getChildren().add(respond);
@@ -249,6 +263,18 @@ final class TicketCard {
                     Button done = button("Move to Done", "Mark the ticket as done",
                             b -> actions.moveToDone(ticket, b.getScene().getWindow()));
                     buttons.getChildren().addAll(review, done);
+                    if (hasTerminal) {
+                        buttons.getChildren().add(terminal);
+                    }
+                    buttons.getChildren().addAll(logButton(ticket, actions), details);
+                }
+                case DONE -> {
+                    Button reopen = button("Remove from Done", "Take the ticket out of Done: back to "
+                                    + (pr != null ? "Review" : "Pending"),
+                            b -> actions.reopen(ticket, b.getScene().getWindow()));
+                    Button remove = button("Delete", "Delete the ticket from Juno (GitLab/GitHub are not touched)",
+                            b -> actions.delete(ticket, b.getScene().getWindow()));
+                    buttons.getChildren().addAll(reopen, remove);
                     if (hasTerminal) {
                         buttons.getChildren().add(terminal);
                     }

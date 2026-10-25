@@ -46,7 +46,7 @@ class ConsoleTest {
         AgentConsoles.Backend backend = new AgentConsoles.Backend() {
             @Override
             public Optional<AgentConsoles.TicketState> state(String ticketId) {
-                return Optional.of(new AgentConsoles.TicketState("WORKING", "Working", "t", null, true, false, null, "b"));
+                return Optional.of(new AgentConsoles.TicketState("WORKING", "Working", "t", null, true, false, null, "b", false, null));
             }
 
             @Override
@@ -56,6 +56,11 @@ class ConsoleTest {
 
             @Override
             public void answer(String ticketId, String answer) {
+            }
+
+            @Override
+            public String exportDesignDoc(String ticketId) {
+                return "x.txt";
             }
         };
         Files.writeString(tmp.resolve("log.txt"), "line one\nline two\npartial");

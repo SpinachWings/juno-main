@@ -176,6 +176,29 @@ public final class GitWorkspace {
                 + "; reconcile it in " + worktree + " first");
     }
 
+    /**
+     * Adds a pattern to the repository's {@code info/exclude} (shared by its worktrees) so files Juno places in
+     * the worktree, such as skill copies, are never committed. Never touches the tracked {@code .gitignore}.
+     */
+    public void exclude(Path worktree, String pattern) throws GitException {
+        Result where = run(worktree, LOCAL_TIMEOUT, false, "rev-parse", "--git-path", "info/exclude");
+        require(where, "git rev-parse --git-path");
+        Path file = Path.of(where.output().strip());
+        if (!file.isAbsolute()) {
+            file = worktree.resolve(file);
+        }
+        try {
+            String current = Files.exists(file) ? Files.readString(file, StandardCharsets.UTF_8) : "";
+            if (current.lines().noneMatch(l -> l.strip().equals(pattern))) {
+                Files.createDirectories(file.getParent());
+                Files.writeString(file, (current.isEmpty() || current.endsWith("\n") ? current : current + "\n")
+                        + "# added by Juno\n" + pattern + "\n", StandardCharsets.UTF_8);
+            }
+        } catch (IOException e) {
+            throw new GitException("Could not update " + file + ": " + e.getMessage());
+        }
+    }
+
     /** A short description of the branch's state for an agent resuming work: commits and uncommitted files. */
     public String describe(Path worktree, String baseRef) {
         StringBuilder sb = new StringBuilder();

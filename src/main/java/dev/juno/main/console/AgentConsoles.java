@@ -43,14 +43,19 @@ public final class AgentConsoles implements AutoCloseable {
 
         /** Answers the agent's question (same as Respond on the board). Throws with a user-facing message. */
         void answer(String ticketId, String answer) throws Exception;
+
+        /** Exports the ticket's design doc as .txt and returns the file path. */
+        String exportDesignDoc(String ticketId) throws Exception;
     }
 
     /** Snapshot of what a console shows besides the log. */
     public record TicketState(String status, String statusLabel, String title, String question, boolean running,
-                              boolean delivering, String pullRequestUrl, String branch) {
+                              boolean delivering, String pullRequestUrl, String branch, boolean designReview,
+                              String designDoc) {
         String signature() {
             return status + "|" + (question == null ? "" : Integer.toHexString(question.hashCode())) + "|" + running
-                    + "|" + delivering + "|" + (pullRequestUrl == null ? "" : pullRequestUrl);
+                    + "|" + delivering + "|" + (pullRequestUrl == null ? "" : pullRequestUrl) + "|" + designReview
+                    + "|" + (designDoc == null ? "" : Integer.toHexString(designDoc.hashCode()));
         }
     }
 
@@ -87,6 +92,7 @@ public final class AgentConsoles implements AutoCloseable {
         }));
         server.createContext("/api/stream", this::stream);
         server.createContext("/api/answer", this::answer);
+        server.createContext("/api/design/export", this::exportDesign);
         server.start();
     }
 
@@ -221,6 +227,8 @@ public final class AgentConsoles implements AutoCloseable {
             st.put("delivering", s.delivering());
             st.put("pr", s.pullRequestUrl());
             st.put("branch", s.branch());
+            st.put("designReview", s.designReview());
+            st.put("designDoc", s.designDoc());
             respond(exchange, 200, body);
         }
     }
@@ -239,6 +247,21 @@ public final class AgentConsoles implements AutoCloseable {
             try {
                 backend.answer(ticketId, text);
                 respond(exchange, 200, mapper.createObjectNode().put("ok", true));
+            } catch (Exception e) {
+                respond(exchange, 409, mapper.createObjectNode().put("error",
+                        e.getMessage() == null ? e.toString() : e.getMessage()));
+            }
+        }
+    }
+
+    private void exportDesign(HttpExchange exchange) throws IOException {
+        try (exchange) {
+            if (!authorised(exchange)) {
+                return;
+            }
+            String ticketId = query(exchange).getOrDefault("ticket", "");
+            try {
+                respond(exchange, 200, mapper.createObjectNode().put("path", backend.exportDesignDoc(ticketId)));
             } catch (Exception e) {
                 respond(exchange, 409, mapper.createObjectNode().put("error",
                         e.getMessage() == null ? e.toString() : e.getMessage()));

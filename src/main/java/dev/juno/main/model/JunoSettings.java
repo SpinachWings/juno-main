@@ -33,6 +33,12 @@ public final class JunoSettings {
      * Windows Terminal / cmd, macOS Terminal or a Linux terminal emulator automatically.
      */
     private String terminalCommand = "";
+    /** Skill packs given to agents (everywhere, per organisation or per project). */
+    private List<SkillEntry> skills = new ArrayList<>();
+    /** Bundled packs already added once; a pack the user removed is not added again. */
+    private List<String> bundledSkillsOffered = new ArrayList<>();
+    /** Where exported design docs (.txt) are written. */
+    private String designDocFolder = defaultDesignDocFolder();
 
     /** Settings for a fresh install: one organisation with one agent profile assigned to it. */
     public static JunoSettings createDefault() {
@@ -105,6 +111,40 @@ public final class JunoSettings {
 
     public void setMaxConcurrentAgents(int maxConcurrentAgents) {
         this.maxConcurrentAgents = maxConcurrentAgents;
+    }
+
+    public List<SkillEntry> getSkills() {
+        if (skills == null) {
+            skills = new ArrayList<>();
+        }
+        return skills;
+    }
+
+    public List<String> getBundledSkillsOffered() {
+        if (bundledSkillsOffered == null) {
+            bundledSkillsOffered = new ArrayList<>();
+        }
+        return bundledSkillsOffered;
+    }
+
+    public String getDesignDocFolder() {
+        return designDocFolder == null || designDocFolder.isBlank() ? defaultDesignDocFolder() : designDocFolder;
+    }
+
+    public void setDesignDocFolder(String designDocFolder) {
+        this.designDocFolder = designDocFolder;
+    }
+
+    /** Skill packs that apply to tickets in this project (enabled ones only). */
+    public List<SkillEntry> skillsFor(Project project) {
+        return getSkills().stream().filter(SkillEntry::isEnabled).filter(e -> e.appliesTo(project)).toList();
+    }
+
+    private static String defaultDesignDocFolder() {
+        Path home = Path.of(System.getProperty("user.home"));
+        Path documents = home.resolve("Documents");
+        return (Files.isDirectory(documents) ? documents.resolve("Juno") : home.resolve("Juno"))
+                .resolve("design-docs").toString();
     }
 
     public boolean isOpenTerminals() {

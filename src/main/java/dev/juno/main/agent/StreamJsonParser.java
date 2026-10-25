@@ -120,9 +120,10 @@ public final class StreamJsonParser {
         String text = resultText != null ? resultText : lastAssistantText;
         String question = extractDecision(text);
         if (question != null) {
-            return new AgentOutcome(AgentOutcome.Kind.NEEDS_DECISION, sessionId, question, costUsd);
+            return new AgentOutcome(AgentOutcome.Kind.NEEDS_DECISION, sessionId, question, costUsd, text);
         }
-        return new AgentOutcome(AgentOutcome.Kind.COMPLETED, sessionId, text == null ? "" : text.strip(), costUsd);
+        return new AgentOutcome(AgentOutcome.Kind.COMPLETED, sessionId, text == null ? "" : text.strip(), costUsd,
+                text);
     }
 
     /** Returns the question following the decision marker, or null if the text contains no marker. */

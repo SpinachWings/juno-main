@@ -7,9 +7,9 @@ A JavaFX orchestrator for Claude Code agents. Tickets move across a six-column b
 | **Pending** | Created or imported, not started. **Start** hands the ticket to an agent. |
 | **Processing** | An agent is working on the ticket's branch. The ticket stays here until its branch is pushed and its pull request opened. |
 | **Awaiting decision** | The agent asked a question, failed, or Juno couldn't push / open the PR. Answer on the board (**Respond**) or in the ticket's terminal; **Retry** re-runs a failed push. |
-| **Review** | PR/MR open (link on the card) and an **AI reviews run** counter. **Run AI review** starts an AI review; **Move to Done** asks for confirmation first. |
+| **Review** | PR/MR open (link on the card) and an **AI reviews run** counter. **Run AI review** starts an AI review; **Move to Done** asks for confirmation first. Juno never merges: a human merges the PR in GitLab/GitHub. |
 | **In AI review** | An AI review agent is addressing the PR's comments in its own terminal. When it finishes, its fixes are pushed and the ticket returns to Review. |
-| **Done** | Finished. |
+| **Done** | Finished. **Remove from Done** sends it back to Review (or Pending); **Delete** removes it from Juno. |
 
 Tickets can be imported from or uploaded to GitLab and GitHub. Juno does this through the
 [`juno-gitlab-mcp`](../juno-gitlab-mcp) and [`juno-github-mcp`](../juno-github-mcp) MCP servers, which it
@@ -154,7 +154,8 @@ up and the ticket stays in Review. Otherwise the ticket moves to **In AI review*
 2. Fetches the branch and fast-forwards it if someone else pushed to it.
 3. Runs the ticket's agent (ticket → project → organisation) with that feedback, marking what is new since
    the last AI review.
-4. Commits, pushes the fixes to the same PR, and posts the agent's summary as a PR comment.
+4. Commits and pushes the fixes to the same PR. The agent's summary is shown on the card and in the log.
+   Juno doesn't post comments on the PR.
 
 Then the ticket returns to Review with its counter incremented. The review agent gets its own terminal
 (`Juno <ticket> AI review`), and its questions also come through Awaiting decision.
@@ -179,6 +180,54 @@ button. Resume:
 
 Closing a ticket's terminal window does **not** interrupt the agent; **Terminal** reopens the console. To
 abandon an interrupted run, move the ticket to another column.
+
+### Design docs
+
+For more complex features, tick **Generate design doc** in the ticket's Details. **Start** then begins with a
+design conversation instead of code:
+1. The agent reads the codebase (without changing it) and asks its questions, which you answer in the terminal
+   or with **Respond**. It then drafts the doc.
+2. The draft appears in the terminal and under **Review design** on the card. There you can:
+   - **approve** it (`/approve` in the terminal, or the button), which starts implementation with the
+     approved design in the agent's prompt
+   - reply with changes, and the agent revises it
+   - **export** it as `.txt` (`/export` in the terminal, or from the dialog or Details)
+3. Exports go to the **design doc folder** (Settings → General) as `<TICKET>-<title>-design.txt`.
+
+To use your own design doc instead, paste it into the Design doc box in Details. It is used as-is.
+
+### Skills
+
+Settings → **Skills** manages skill packs, i.e. folders of Claude skills (`<skill>/SKILL.md`):
+- **Uploading.** Add a `SKILL.md`/`.md` file, a folder, or a `.zip`/`.skill` archive. It is copied into
+  `~/.juno/skills/`.
+- **Scope.** Each pack applies **everywhere** (the whole orchestration), to one **organisation**, or to one
+  **project**. Individual skills inside a pack can be switched off.
+- **At run time.** Before each run, the skills that apply to the ticket are copied into its worktree's
+  `.claude/skills/juno-*` folders. They are excluded from git there, via the repository's
+  `.git/info/exclude`, so they are never committed. "Skill" is added to the agent's allowed tools.
+
+Bundled with Juno and added at the orchestration level on first start:
+- **superpowers** ([obra/superpowers](https://github.com/obra/superpowers), MIT; unmodified copy, source
+  commit in `bundled-skills/superpowers/SOURCE.txt`). `finishing-a-development-branch` and
+  `using-git-worktrees` start **switched off** because they conflict with Juno: Juno creates the worktree,
+  pushes and opens the PR, and nothing is merged without a human.
+- **juno-github** / **juno-gitlab**: the MCP servers' safety skills, spelling out the only permitted actions
+  and the never-merge rule.
+
+Juno's rules always take precedence over any skill.
+
+### Never merging
+
+Pull/merge requests are only ever merged by a human, in GitLab/GitHub. This is enforced in three places:
+- **MCP servers.** They only reach an allowlist of endpoints (copy/paste ticket info, open a PR/MR, read
+  review comments). Merge, approve, auto-merge and rebase endpoints are blocked outright.
+- **Agent command line.** Every agent is started with `--disallowedTools` covering `git push`,
+  `git merge`/`rebase`, `gh pr merge`/`review`/`close`, `glab mr merge`/`approve`/`close` and the `gh`/`glab`
+  API commands.
+- **Prompts and skills.** They tell agents explicitly never to merge.
+
+Don't add `gh`, `glab` or `curl` to an agent's allowed tools.
 
 ### How agents ask for decisions
 
@@ -225,6 +274,7 @@ dev.juno.main
 ├── agent                Claude Code process runner, stream-json parser, prompts
 ├── git                  worktree/branch preparation, commit, push
 ├── console              agent terminals: local console API, terminal launcher, console client
+├── skills               skill library: uploads, bundled packs, per-run copies
 ├── service              BoardService: orchestration, thread-safe, UI-agnostic
 └── ui                   Board, cards, dialogs
 ```

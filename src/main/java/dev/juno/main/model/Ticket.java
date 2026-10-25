@@ -47,6 +47,16 @@ public final class Ticket {
     private boolean deliveryPending;
     /** Journal of the most recent finished run. */
     private String lastJournal;
+    /** Start with a design doc conversation (for complex features) before implementing. */
+    private boolean generateDesignDoc;
+    /** The design doc: generated with the agent, or written/pasted by the user. */
+    private String designDoc = "";
+    /** {@code agent} or {@code user}. */
+    private String designDocSource;
+    /** Whether the design doc is approved for implementation. */
+    private boolean designDocApproved;
+    /** Where the design doc was last exported. */
+    private String designDocFile;
 
     /** Claude Code session id of the most recent agent run, used to resume after a decision. */
     private String agentSessionId;
@@ -253,6 +263,52 @@ public final class Ticket {
 
     public void setLastJournal(String lastJournal) {
         this.lastJournal = lastJournal;
+    }
+
+    public boolean isGenerateDesignDoc() {
+        return generateDesignDoc;
+    }
+
+    public void setGenerateDesignDoc(boolean generateDesignDoc) {
+        this.generateDesignDoc = generateDesignDoc;
+    }
+
+    public String getDesignDoc() {
+        return designDoc == null ? "" : designDoc;
+    }
+
+    public void setDesignDoc(String designDoc) {
+        this.designDoc = designDoc == null ? "" : designDoc;
+    }
+
+    public String getDesignDocSource() {
+        return designDocSource;
+    }
+
+    public void setDesignDocSource(String designDocSource) {
+        this.designDocSource = designDocSource;
+    }
+
+    public boolean isDesignDocApproved() {
+        return designDocApproved;
+    }
+
+    public void setDesignDocApproved(boolean designDocApproved) {
+        this.designDocApproved = designDocApproved;
+    }
+
+    public String getDesignDocFile() {
+        return designDocFile;
+    }
+
+    public void setDesignDocFile(String designDocFile) {
+        this.designDocFile = designDocFile;
+    }
+
+    /** True while a generated design doc is waiting for the human to approve it or ask for changes. */
+    public boolean isDesignAwaitingApproval() {
+        return getRunKind() == RunKind.DESIGN && getStatus() == TicketStatus.AWAITING_DECISION
+                && !getDesignDoc().isBlank() && !designDocApproved;
     }
 
     /** Whether work has started, which fixes the base and branch names. */

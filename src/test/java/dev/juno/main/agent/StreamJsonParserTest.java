@@ -70,7 +70,10 @@ class StreamJsonParserTest {
         assertEquals(List.of("claude", "-p", "--output-format", "stream-json", "--verbose",
                 "--model", "claude-opus-5-5", "--permission-mode", "acceptEdits", "--max-turns", "30",
                 "--allowedTools", "Bash(mvn test:*)", "--mcp-config", "mcp.json", "--resume", "sess",
+                "--disallowedTools", String.join(" ", AgentRunner.FORBIDDEN_TOOLS),
                 "--add-dir", "C:\\My Docs"), cmd);
+        assertTrue(AgentRunner.FORBIDDEN_TOOLS.contains("Bash(gh pr merge:*)"));
+        assertTrue(AgentRunner.FORBIDDEN_TOOLS.contains("Bash(glab mr merge:*)"));
 
         List<String> windows = AgentRunner.buildCommand(s, null, null, true);
         assertEquals(List.of("cmd.exe", "/c", "claude"), windows.subList(0, 3));

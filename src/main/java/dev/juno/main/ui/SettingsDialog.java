@@ -4,6 +4,9 @@ import dev.juno.main.model.AgentProfile;
 import dev.juno.main.model.JunoSettings;
 import dev.juno.main.model.Organisation;
 import dev.juno.main.model.Project;
+import dev.juno.main.model.SkillEntry;
+import dev.juno.main.model.SkillScope;
+import dev.juno.main.skills.SkillLibrary;
 import dev.juno.main.model.TrackerKind;
 import dev.juno.main.model.TrackerSettings;
 import dev.juno.main.service.BoardService;
@@ -31,6 +34,7 @@ import javafx.scene.control.TreeItem;
 import javafx.scene.control.TreeView;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.ColumnConstraints;
+import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
@@ -120,6 +124,18 @@ final class SettingsDialog extends Dialog<JunoSettings> {
     private final Map<TrackerKind, TextField> mcpJar = new EnumMap<>(TrackerKind.class);
     private final TextField javaExecutable = new TextField();
     private final Spinner<Integer> maxAgents = new Spinner<>(1, 32, 3);
+    private final TextField designDocFolder = new TextField();
+
+    // skills
+    private final ListView<SkillEntry> skillList = new ListView<>();
+    private final TextField skillName = new TextField();
+    private final Label skillDescription = new Label();
+    private final ComboBox<ScopeItem> skillScope = new ComboBox<>();
+    private final CheckBox skillEnabled = new CheckBox("Enabled");
+    private final VBox skillContents = new VBox(8);
+    private final GridPane skillForm = new GridPane();
+    private final List<SkillEntry> importedThisSession = new ArrayList<>();
+    private final List<SkillEntry> removedThisSession = new ArrayList<>();
     private final CheckBox openTerminals =
             new CheckBox("Open a terminal window with a live console when an agent starts");
     private final TextField terminalCommand = new TextField();
@@ -135,13 +151,16 @@ final class SettingsDialog extends Dialog<JunoSettings> {
 
         Tab orgTab = new Tab("Organisations & projects", buildOrganisationsTab());
         Tab agentTab = new Tab("Agents", buildAgentsTab());
+        Tab skillsTab = new Tab("Skills", buildSkillsTab());
         Tab generalTab = new Tab("General", scroll(buildGeneralTab()));
-        TabPane tabs = new TabPane(orgTab, agentTab, generalTab);
+        TabPane tabs = new TabPane(orgTab, agentTab, skillsTab, generalTab);
         tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
         // Agent names may have changed on the Agents tab; refresh the agent pickers.
         tabs.getSelectionModel().selectedItemProperty().addListener((obs, old, tab) -> {
             if (tab == orgTab) {
                 showSelection();
+            } else if (tab == skillsTab) {
+                loadSkill(skillList.getSelectionModel().getSelectedItem());
             }
         });
         getDialogPane().setContent(tabs);
@@ -151,8 +170,11 @@ final class SettingsDialog extends Dialog<JunoSettings> {
         getDialogPane().getButtonTypes().addAll(save, ButtonType.CANCEL);
         setResultConverter(button -> {
             if (button != save) {
+                // Discard the files of skills uploaded in this dialog.
+                importedThisSession.forEach(e -> service.skillLibrary().deleteUpload(e));
                 return null;
             }
+            removedThisSession.forEach(e -> service.skillLibrary().deleteUpload(e));
             commitGeneral();
             working.normalise();
             return working;
@@ -726,8 +748,225 @@ final class SettingsDialog extends Dialog<JunoSettings> {
         grid.addRow(row++, new Label("Terminal command"), terminalCommand);
         grid.add(hint("Each ticket's terminal streams its agent's activity, and you can answer the agent's "
                 + "questions there as well as on the board. A custom command can use {title} and {script}, e.g. "
-                + "'wezterm start -- {script}' or 'gnome-terminal --title \"{title}\" -- {script}'."), 1, row);
+                + "'wezterm start -- {script}' or 'gnome-terminal --title \"{title}\" -- {script}'."), 1, row++);
+
+        grid.add(sectionTitle("Design docs"), 0, row++, 2, 1);
+        designDocFolder.setText(working.getDesignDocFolder());
+        Button browseDocs = new Button("Browse…");
+        browseDocs.setOnAction(e -> {
+            DirectoryChooser chooser = new DirectoryChooser();
+            chooser.setTitle("Design doc folder");
+            File current = new File(designDocFolder.getText());
+            if (current.isDirectory()) {
+                chooser.setInitialDirectory(current);
+            }
+            File dir = chooser.showDialog(getDialogPane().getScene().getWindow());
+            if (dir != null) {
+                designDocFolder.setText(dir.getAbsolutePath());
+            }
+        });
+        HBox docsRow = new HBox(6, designDocFolder, browseDocs);
+        HBox.setHgrow(designDocFolder, Priority.ALWAYS);
+        grid.addRow(row++, new Label("Design doc folder"), docsRow);
+        grid.add(hint("Design docs exported from a ticket's terminal (/export) or its Details are written here as "
+                + "<TICKET>-<title>-design.txt."), 1, row);
         return grid;
+    }
+
+    // =========================================================================================
+    // Skills
+    // =========================================================================================
+
+    /** Where a skill pack applies. */
+    private record ScopeItem(SkillScope scope, String id, String label) {
+        @Override
+        public String toString() {
+            return label;
+        }
+    }
+
+    private Node buildSkillsTab() {
+        skillList.getItems().setAll(working.getSkills());
+        skillList.setPrefWidth(300);
+        skillList.setPlaceholder(new Label("No skills yet"));
+        skillList.setCellFactory(list -> new javafx.scene.control.ListCell<>() {
+            @Override
+            protected void updateItem(SkillEntry e, boolean empty) {
+                super.updateItem(e, empty);
+                if (empty || e == null) {
+                    setText(null);
+                } else {
+                    setText(e.getName() + "\n" + scopeLabel(e) + (e.isEnabled() ? "" : "  (off)"));
+                }
+            }
+        });
+
+        Button addFile = new Button("Add skill file…");
+        addFile.setOnAction(e -> {
+            FileChooser chooser = new FileChooser();
+            chooser.setTitle("Skill file");
+            chooser.getExtensionFilters().addAll(
+                    new FileChooser.ExtensionFilter("Skill (SKILL.md, .md, .zip, .skill)", "*.md", "*.zip", "*.skill"),
+                    new FileChooser.ExtensionFilter("All files", "*.*"));
+            File file = chooser.showOpenDialog(getDialogPane().getScene().getWindow());
+            if (file != null) {
+                importSkill(file.toPath());
+            }
+        });
+        Button addFolder = new Button("Add skill folder…");
+        addFolder.setOnAction(e -> {
+            DirectoryChooser chooser = new DirectoryChooser();
+            chooser.setTitle("Folder containing SKILL.md (or several skill folders)");
+            File dir = chooser.showDialog(getDialogPane().getScene().getWindow());
+            if (dir != null) {
+                importSkill(dir.toPath());
+            }
+        });
+        Button remove = new Button("Remove");
+        remove.disableProperty().bind(skillList.getSelectionModel().selectedItemProperty().isNull());
+        remove.setOnAction(e -> {
+            SkillEntry entry = skillList.getSelectionModel().getSelectedItem();
+            if (entry != null && Fx.confirm(getDialogPane().getScene().getWindow(), "Remove " + entry.getName() + "?",
+                    entry.isBundled() ? "This bundled pack won't be added again automatically."
+                            : "Its files are deleted from Juno's skill library when you save.")) {
+                working.getSkills().remove(entry);
+                skillList.getItems().remove(entry);
+                if (!importedThisSession.remove(entry)) {
+                    removedThisSession.add(entry);
+                } else {
+                    service.skillLibrary().deleteUpload(entry);
+                }
+            }
+        });
+        FlowPane buttons = new FlowPane(6, 6, addFile, addFolder, remove);
+        VBox left = new VBox(8, skillList, buttons);
+        VBox.setVgrow(skillList, Priority.ALWAYS);
+
+        skillScope.setMaxWidth(Double.MAX_VALUE);
+        skillScope.setOnAction(e -> {
+            SkillEntry entry = skillList.getSelectionModel().getSelectedItem();
+            ScopeItem item = skillScope.getValue();
+            if (!loading && entry != null && item != null) {
+                entry.setScope(item.scope());
+                entry.setScopeId(item.id());
+                skillList.refresh();
+            }
+        });
+        skillEnabled.selectedProperty().addListener((obs, old, on) -> {
+            SkillEntry entry = skillList.getSelectionModel().getSelectedItem();
+            if (!loading && entry != null) {
+                entry.setEnabled(on);
+                skillList.refresh();
+            }
+        });
+        skillName.textProperty().addListener((obs, old, v) -> {
+            SkillEntry entry = skillList.getSelectionModel().getSelectedItem();
+            if (!loading && entry != null) {
+                entry.setName(v.strip());
+                skillList.refresh();
+            }
+        });
+        skillDescription.setWrapText(true);
+        skillDescription.getStyleClass().add("hint");
+
+        formGrid(skillForm);
+        int row = 0;
+        skillForm.add(sectionTitle("Skill pack"), 0, row++, 2, 1);
+        skillForm.addRow(row++, new Label("Name"), skillName);
+        skillForm.addRow(row++, new Label("Applies to"), skillScope);
+        skillForm.add(skillEnabled, 1, row++);
+        skillForm.addRow(row++, new Label("Description"), skillDescription);
+        skillForm.add(sectionTitle("Skills in this pack"), 0, row++, 2, 1);
+        skillForm.add(skillContents, 0, row++, 2, 1);
+        skillForm.add(hint("Agents get the skills that apply to their ticket: everywhere (the whole "
+                + "orchestration), its organisation, and its project. They are copied into the ticket's worktree "
+                + "(.claude/skills/juno-*) for each run and never committed. Juno's own rules (never merge, never "
+                + "push) always take precedence over a skill."), 0, row, 2, 1);
+
+        skillList.getSelectionModel().selectedItemProperty().addListener((obs, old, e) -> loadSkill(e));
+        if (!skillList.getItems().isEmpty()) {
+            skillList.getSelectionModel().selectFirst();
+        } else {
+            loadSkill(null);
+        }
+
+        BorderPane pane = new BorderPane();
+        pane.setLeft(left);
+        pane.setCenter(scroll(skillForm));
+        BorderPane.setMargin(pane.getCenter(), new Insets(0, 0, 0, 12));
+        pane.setPadding(new Insets(12));
+        return pane;
+    }
+
+    private void importSkill(java.nio.file.Path source) {
+        ScopeItem scope = skillScope.getValue();
+        try {
+            SkillEntry entry = service.skillLibrary().importSkill(source,
+                    scope == null ? SkillScope.GLOBAL : scope.scope(), scope == null ? null : scope.id());
+            working.getSkills().add(entry);
+            importedThisSession.add(entry);
+            skillList.getItems().add(entry);
+            skillList.getSelectionModel().select(entry);
+        } catch (java.io.IOException ex) {
+            Fx.error(getDialogPane().getScene().getWindow(), "Could not add the skill", ex);
+        }
+    }
+
+    private List<ScopeItem> scopeItems() {
+        List<ScopeItem> items = new ArrayList<>();
+        items.add(new ScopeItem(SkillScope.GLOBAL, null, "Everywhere (whole orchestration)"));
+        for (Organisation o : working.getOrganisations()) {
+            items.add(new ScopeItem(SkillScope.ORGANISATION, o.getId(), "Organisation: " + o.getName()));
+        }
+        for (Project p : working.getProjects()) {
+            String org = working.organisation(p.getOrgId()).map(Organisation::getName).orElse("?");
+            items.add(new ScopeItem(SkillScope.PROJECT, p.getId(), "Project: " + org + " / " + p.getName()));
+        }
+        return items;
+    }
+
+    private String scopeLabel(SkillEntry e) {
+        return scopeItems().stream()
+                .filter(i -> i.scope() == e.getScope() && Objects.equals(i.id(), e.getScopeId()))
+                .map(ScopeItem::label).findFirst()
+                .orElse(e.getScope() == SkillScope.GLOBAL ? "Everywhere" : "Unassigned (its target was removed)");
+    }
+
+    private void loadSkill(SkillEntry e) {
+        loading = true;
+        try {
+            skillForm.setDisable(e == null);
+            List<ScopeItem> items = scopeItems();
+            skillScope.getItems().setAll(items);
+            skillName.setText(e == null ? "" : e.getName());
+            skillEnabled.setSelected(e != null && e.isEnabled());
+            skillDescription.setText(e == null ? "" : e.getDescription()
+                    + (e.isBundled() ? "\n(Bundled with Juno.)" : ""));
+            skillScope.setValue(e == null ? items.getFirst() : items.stream()
+                    .filter(i -> i.scope() == e.getScope() && Objects.equals(i.id(), e.getScopeId()))
+                    .findFirst().orElse(items.getFirst()));
+            skillContents.getChildren().clear();
+            if (e != null) {
+                for (SkillLibrary.SkillInfo info : SkillLibrary.scan(java.nio.file.Path.of(e.getFolder()))) {
+                    CheckBox box = new CheckBox(info.name());
+                    box.setSelected(!e.getDisabledSkills().contains(info.folderName()));
+                    box.setTooltip(new javafx.scene.control.Tooltip(info.description()));
+                    box.selectedProperty().addListener((obs, old, on) -> {
+                        if (on) {
+                            e.getDisabledSkills().remove(info.folderName());
+                        } else if (!e.getDisabledSkills().contains(info.folderName())) {
+                            e.getDisabledSkills().add(info.folderName());
+                        }
+                    });
+                    Label desc = new Label(info.description());
+                    desc.setWrapText(true);
+                    desc.getStyleClass().add("hint");
+                    skillContents.getChildren().add(new VBox(1, box, desc));
+                }
+            }
+        } finally {
+            loading = false;
+        }
     }
 
     private void commitGeneral() {
@@ -738,6 +977,7 @@ final class SettingsDialog extends Dialog<JunoSettings> {
         working.setMaxConcurrentAgents(maxAgents.getValue());
         working.setOpenTerminals(openTerminals.isSelected());
         working.setTerminalCommand(terminalCommand.getText().strip());
+        working.setDesignDocFolder(designDocFolder.getText().strip());
     }
 
     // =========================================================================================

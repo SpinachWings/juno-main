@@ -104,15 +104,6 @@ public final class IssueTrackerService implements AutoCloseable {
         return comments;
     }
 
-    /** Posts a comment on a pull/merge request. */
-    public void commentOnPullRequest(Organisation org, TrackerKind kind, String location, long number, String body)
-            throws McpException {
-        ObjectNode args = args(kind, location);
-        args.put("number", number);
-        args.put("body", body);
-        client(org, kind).callTool(kind.pullRequestCommentTool(), args);
-    }
-
     /** Starts (if needed) the organisation's server and returns its tool names; used by Settings' "Test". */
     public List<String> test(Organisation org, TrackerKind kind) throws McpException {
         return client(org, kind).listTools();
