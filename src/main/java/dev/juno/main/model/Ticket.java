@@ -27,8 +27,18 @@ public final class Ticket {
     private String baseRef;
     /** The pull/merge request opened when the agent finished. */
     private PullRequestRef pullRequest;
-    /** Why the pull request could not be opened, if it failed. */
+    /** Why pushing / opening the pull request / posting the review failed, if it did. */
     private String pullRequestError;
+    /** When the pull request was opened (ISO-8601). */
+    private String pullRequestOpenedAt;
+    /** What the current or most recent agent run is for. */
+    private RunKind runKind = RunKind.WORK;
+    /** When the last AI review started (ISO-8601); comments after this are new. */
+    private String lastReviewAt;
+    /** The review agent's summary from its last run. */
+    private String lastReviewSummary;
+    /** How many AI reviews have completed. */
+    private int reviewCount;
 
     /** Claude Code session id of the most recent agent run, used to resume after a decision. */
     private String agentSessionId;
@@ -163,6 +173,46 @@ public final class Ticket {
 
     public void setPullRequestError(String pullRequestError) {
         this.pullRequestError = pullRequestError;
+    }
+
+    public String getPullRequestOpenedAt() {
+        return pullRequestOpenedAt;
+    }
+
+    public void setPullRequestOpenedAt(String pullRequestOpenedAt) {
+        this.pullRequestOpenedAt = pullRequestOpenedAt;
+    }
+
+    public RunKind getRunKind() {
+        return runKind == null ? RunKind.WORK : runKind;
+    }
+
+    public void setRunKind(RunKind runKind) {
+        this.runKind = runKind;
+    }
+
+    public String getLastReviewAt() {
+        return lastReviewAt;
+    }
+
+    public void setLastReviewAt(String lastReviewAt) {
+        this.lastReviewAt = lastReviewAt;
+    }
+
+    public String getLastReviewSummary() {
+        return lastReviewSummary;
+    }
+
+    public void setLastReviewSummary(String lastReviewSummary) {
+        this.lastReviewSummary = lastReviewSummary;
+    }
+
+    public int getReviewCount() {
+        return reviewCount;
+    }
+
+    public void setReviewCount(int reviewCount) {
+        this.reviewCount = reviewCount;
     }
 
     /** Whether work has started, which fixes the base and branch names. */

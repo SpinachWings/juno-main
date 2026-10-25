@@ -5,10 +5,10 @@ A JavaFX orchestrator for Claude Code agents. Tickets move across a six-column b
 | Column | Meaning |
 | --- | --- |
 | **Pending** | Created or imported, not started. **Start** hands the ticket to an agent. |
-| **Working** | A Claude Code agent is running in the ticket's project directory. |
-| **Awaiting decision** | The agent asked a question, failed, or was interrupted. **Respond** resumes its session. |
-| **AI review** | The agent finished; its summary is shown on the card. |
-| **Human review** | *(not automated yet; move tickets here manually)* |
+| **Working** | A Claude Code agent is working on the ticket's branch. The ticket stays here until its branch is pushed and its pull request opened. |
+| **Awaiting decision** | The agent asked a question, failed, or Juno couldn't push / open the PR. Answer on the board (**Respond**) or in the ticket's terminal; **Retry** re-runs a failed push. |
+| **AI review** | Branch pushed, PR open (link on the card). **Start AI review** runs an agent on the review comments and pushes its fixes to the PR. |
+| **Human review** | *(move tickets here manually for now; the PR link stays on the card)* |
 | **Done** | *(not automated yet)* |
 
 Tickets can be imported from or uploaded to GitLab and GitHub. Juno does this through the
@@ -106,7 +106,7 @@ Base branch and branch name are fixed once work has started.
    - If the branch already exists, it is checked out instead.
    - The agent runs in that worktree. Its prompt tells it to commit to the branch and not to push or switch
      branches.
-2. **When the agent finishes**:
+2. **When the agent finishes** (the ticket stays in Working meanwhile):
    - Juno commits anything it left uncommitted and checks the branch has commits beyond the base.
    - It runs `git push -u origin <branch>` with your own git credentials, and never prompts for them.
    - It then opens a pull request (GitHub) or merge request (GitLab) into the base branch through the
@@ -114,14 +114,49 @@ Base branch and branch name are fixed once work has started.
      linked issue is in the same repository.
    - The PR goes to the tracker the ticket is linked to if possible, otherwise GitHub, then GitLab, using
      the project's configured repo.
-3. The card shows the PR link. If something failed (no commits, push rejected, repo not configured), the
-   card shows why and offers **Retry PR**. Retrying never opens a duplicate PR.
+3. Once pushed and the PR is open, the ticket moves to **AI review** with the PR link on its card. If
+   something failed (no commits, push rejected, repo not configured), it moves to **Awaiting decision**
+   with the reason. **Retry** tries again and never opens a duplicate PR; replying there resumes the agent
+   instead.
 
 Tips:
 - Add `Bash(git add:*) Bash(git commit:*) Bash(git status) Bash(git diff:*)` to the agent's allowed tools,
   so it can commit with meaningful messages. Otherwise Juno makes a single commit at the end.
 - Worktrees stay in place after the PR is opened, so a resumed session or a retry reuses them. Remove one
   with `git worktree remove <path>` once the PR is merged.
+
+### Agent terminals
+
+When an agent starts, Juno opens a terminal window titled `Juno <ticket>` with a live agent console:
+- it streams everything the agent does (the same as **Log**, including history)
+- when the agent asks for a decision, it shows the question and lets you type the answer. Finish with an
+  empty line.
+
+You can answer either there or on the board; whichever comes first wins and the other updates itself. The
+**Terminal** button on a card brings that window to the front, or opens a fresh console if you closed it.
+
+How it works:
+- Agents still run headless under Juno's control. That is what lets both the board and the terminal answer
+  questions and lets Juno detect when the work is done.
+- The console talks to Juno over a local API bound to `127.0.0.1` and protected by a random token
+  (`~/.juno/console.token`).
+- Windows uses Windows Terminal if installed, otherwise a console window. macOS uses Terminal.app. Linux uses
+  the first terminal emulator found. **Settings → General** can turn terminals off or set a custom command
+  (`{title}`, `{script}`).
+
+### AI review
+
+**Start AI review** (AI review column):
+1. Reads the PR/MR's feedback: conversation comments, review summaries and inline comments with file, line
+   and diff context. It also reads comments on the linked issues made since the PR was opened. Resolved
+   GitLab threads and Juno's own comments are ignored.
+2. Fetches the branch and fast-forwards it if someone else pushed to it.
+3. Runs the ticket's agent (ticket → project → organisation) with that feedback, marking what is new since
+   the last AI review.
+4. Commits, pushes the fixes to the same PR, and posts the agent's summary as a PR comment.
+
+It needs at least one new comment since the last AI review. The review agent gets its own terminal console,
+and its questions also come through Awaiting decision.
 
 ### How agents ask for decisions
 
@@ -153,6 +188,7 @@ Everything is stored in `~/.juno` (override with the `JUNO_HOME` environment var
 - `logs/<ticket>.log`: agent activity
 - `agent-mcp/<ticket>.json`: per-run MCP config for agents (only that ticket's organisation's servers)
 - `worktrees/<ticket>/`: the git worktree each ticket's agent works in
+- `consoles/`: the scripts that open each ticket's terminal; `console.token` secures the console API
 
 ## Layout
 
@@ -165,6 +201,7 @@ dev.juno.main
 ├── integration          GitLab/GitHub via per-organisation MCP server processes
 ├── agent                Claude Code process runner, stream-json parser, prompts
 ├── git                  worktree/branch preparation, commit, push
+├── console              agent terminals: local console API, terminal launcher, console client
 ├── service              BoardService: orchestration, thread-safe, UI-agnostic
 └── ui                   Board, cards, dialogs
 ```

@@ -327,8 +327,10 @@ public final class BoardView {
 
             @Override
             public void stop(Ticket t, Window owner) {
-                if (Fx.confirm(owner, "Stop agent?", "Stop the agent working on " + t.getId()
-                        + "? The ticket goes back to Pending; changes already made stay in the working tree.")) {
+                boolean review = t.getRunKind() == dev.juno.main.model.RunKind.REVIEW;
+                if (Fx.confirm(owner, "Stop agent?", "Stop the " + (review ? "AI review agent" : "agent")
+                        + " working on " + t.getId() + "? The ticket goes back to " + (review ? "AI review" : "Pending")
+                        + "; commits and changes already made stay on its branch.")) {
                     service.stopWork(t.getId());
                     status("Stopping agent on " + t.getId());
                 }
@@ -371,14 +373,31 @@ public final class BoardView {
 
             @Override
             public void retryPullRequest(Ticket t, Window owner) {
-                status("Opening pull request for " + t.getId() + "…");
+                status("Retrying " + t.getId() + "…");
                 Fx.async(() -> {
-                    service.openPullRequest(t.getId());
+                    service.deliver(t.getId());
                     return null;
-                }, ok -> status(t.getPullRequest() != null
-                        ? "Opened " + t.getPullRequest().display() + " for " + t.getId()
-                        : "Pull request for " + t.getId() + " not opened; see the card"),
-                        err -> Fx.error(owner, "Could not open the pull request", err));
+                }, ok -> status(t.getPullRequestError() == null
+                        ? t.getId() + " delivered" + (t.getPullRequest() == null ? "" : ": " + t.getPullRequest().display())
+                        : t.getId() + " still failing; see the card"),
+                        err -> Fx.error(owner, "Retry failed", err));
+            }
+
+            @Override
+            public void terminal(Ticket t, Window owner) {
+                Fx.async(() -> service.showTerminal(t.getId()), BoardView.this::status,
+                        err -> Fx.error(owner, "Could not open the terminal", err));
+            }
+
+            @Override
+            public void startReview(Ticket t, Window owner) {
+                status("Reading review comments for " + t.getId() + "…");
+                Fx.async(() -> service.startReview(t.getId()),
+                        count -> status("AI review started on " + t.getId() + " with " + count + " comment(s)"),
+                        err -> {
+                            status("AI review not started");
+                            Fx.error(owner, "Could not start the AI review", err);
+                        });
             }
 
             @Override

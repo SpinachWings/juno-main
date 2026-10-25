@@ -120,6 +120,9 @@ final class SettingsDialog extends Dialog<JunoSettings> {
     private final Map<TrackerKind, TextField> mcpJar = new EnumMap<>(TrackerKind.class);
     private final TextField javaExecutable = new TextField();
     private final Spinner<Integer> maxAgents = new Spinner<>(1, 32, 3);
+    private final CheckBox openTerminals =
+            new CheckBox("Open a terminal window with a live console when an agent starts");
+    private final TextField terminalCommand = new TextField();
 
     SettingsDialog(Window owner, BoardService service, JunoSettings working) {
         this.service = service;
@@ -714,7 +717,16 @@ final class SettingsDialog extends Dialog<JunoSettings> {
                 + "with its own credentials."), 1, row++);
         grid.add(sectionTitle("Agents"), 0, row++, 2, 1);
         maxAgents.getValueFactory().setValue(Math.max(1, working.getMaxConcurrentAgents()));
-        grid.addRow(row, new Label("Max concurrent agents"), maxAgents);
+        grid.addRow(row++, new Label("Max concurrent agents"), maxAgents);
+        grid.add(sectionTitle("Agent terminals"), 0, row++, 2, 1);
+        openTerminals.setSelected(working.isOpenTerminals());
+        grid.add(openTerminals, 1, row++);
+        terminalCommand.setText(working.getTerminalCommand());
+        terminalCommand.setPromptText("Automatic (Windows Terminal / cmd, macOS Terminal, Linux terminal emulator)");
+        grid.addRow(row++, new Label("Terminal command"), terminalCommand);
+        grid.add(hint("Each ticket's terminal streams its agent's activity, and you can answer the agent's "
+                + "questions there as well as on the board. A custom command can use {title} and {script}, e.g. "
+                + "'wezterm start -- {script}' or 'gnome-terminal --title \"{title}\" -- {script}'."), 1, row);
         return grid;
     }
 
@@ -724,6 +736,8 @@ final class SettingsDialog extends Dialog<JunoSettings> {
         }
         working.setJavaExecutable(javaExecutable.getText().strip());
         working.setMaxConcurrentAgents(maxAgents.getValue());
+        working.setOpenTerminals(openTerminals.isSelected());
+        working.setTerminalCommand(terminalCommand.getText().strip());
     }
 
     // =========================================================================================

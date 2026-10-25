@@ -6,10 +6,12 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import dev.juno.main.agent.AgentOutcome;
 import dev.juno.main.agent.AgentRunner;
 import dev.juno.main.agent.PromptBuilder;
+import dev.juno.main.console.AgentConsoles;
 import dev.juno.main.git.GitException;
 import dev.juno.main.git.GitWorkspace;
 import dev.juno.main.integration.IssueData;
 import dev.juno.main.integration.IssueTrackerService;
+import dev.juno.main.integration.ReviewComment;
 import dev.juno.main.mcp.McpException;
 import dev.juno.main.model.AgentAssignment;
 import dev.juno.main.model.AgentProfile;
@@ -18,6 +20,7 @@ import dev.juno.main.model.JunoSettings;
 import dev.juno.main.model.Organisation;
 import dev.juno.main.model.Project;
 import dev.juno.main.model.PullRequestRef;
+import dev.juno.main.model.RunKind;
 import dev.juno.main.model.Ticket;
 import dev.juno.main.model.TicketStatus;
 import dev.juno.main.model.TrackerKind;
@@ -65,8 +68,12 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
     private final List<String> trackerLog = new CopyOnWriteArrayList<>();
     /** Tickets whose branch is being prepared before an agent starts. */
     private final Set<String> preparing = new HashSet<>();
-    /** Tickets whose pull request is being opened. */
-    private final Set<String> openingPr = ConcurrentHashMap.newKeySet();
+    /** Tickets being delivered (push + PR / review comment). */
+    private final Set<String> delivering = ConcurrentHashMap.newKeySet();
+    /** When each in-progress AI review started (comments after this are "new" next time). */
+    private final Map<String, Instant> reviewStarts = new ConcurrentHashMap<>();
+    /** Terminal consoles; null if the local console server could not start. */
+    private final AgentConsoles consoles;
 
     public BoardService(JunoStore store) {
         this.store = store;
@@ -75,6 +82,14 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         this.runner = new AgentRunner(this);
         this.trackers = new IssueTrackerService(this::settings, this::trackerLog);
         recoverInterruptedWork();
+        AgentConsoles c;
+        try {
+            c = new AgentConsoles(consoleBackend(), store.home(), this::trackerLog);
+        } catch (IOException e) {
+            System.err.println("Agent consoles unavailable: " + e.getMessage());
+            c = null;
+        }
+        this.consoles = c;
     }
 
     // ---- listeners --------------------------------------------------------------------------
@@ -249,7 +264,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
      * the resolved agent there with the ticket and its initial instructions as the prompt.
      */
     public void startWork(String ticketId) throws JunoException {
-        beginRun(ticketId, false, null);
+        beginRun(ticketId, RunKind.WORK, null, null);
     }
 
     /** Answers an agent's question (or retries after a failure / interruption) and resumes its session. */
@@ -257,16 +272,94 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         if (answer == null || answer.isBlank()) {
             throw new JunoException("Enter a response for the agent");
         }
-        beginRun(ticketId, true, answer);
+        RunKind kind;
+        synchronized (this) {
+            Ticket t = require(ticketId);
+            if (t.getStatus() != TicketStatus.AWAITING_DECISION) {
+                throw new JunoException(ticketId + " is not waiting for a decision");
+            }
+            kind = t.getRunKind();
+        }
+        beginRun(ticketId, kind, answer, null);
     }
 
-    private void beginRun(String ticketId, boolean resume, String answer) throws JunoException {
+    /** Feedback gathered for an AI review run. */
+    private record ReviewInput(List<ReviewComment> comments, Instant newSince) {
+    }
+
+    /**
+     * Starts an AI review: reads the feedback on the ticket's pull/merge request (plus comments on its linked
+     * issues since the PR was opened), brings the branch up to date and runs the ticket's agent to address it.
+     * The fixes are committed, pushed to the same PR, and the agent's summary is posted as a PR comment.
+     *
+     * @return the number of comments handed to the agent
+     */
+    public int startReview(String ticketId) throws JunoException {
+        Ticket t;
+        Organisation org;
+        PullRequestRef pr;
+        Instant since;
+        Instant prOpened;
+        synchronized (this) {
+            if (preparing.contains(ticketId) || runner.isRunning(ticketId) || delivering.contains(ticketId)) {
+                throw new JunoException(ticketId + " already has an agent running");
+            }
+            t = require(ticketId);
+            pr = t.getPullRequest();
+            if (pr == null) {
+                throw new JunoException(t.getId() + " has no pull request to review yet");
+            }
+            Project project = requireProject(t);
+            org = settings.organisationOf(project)
+                    .orElseThrow(() -> new JunoException("Project '" + project.getName() + "' has no organisation"));
+            since = parseInstant(t.getLastReviewAt());
+            prOpened = parseInstant(t.getPullRequestOpenedAt());
+        }
+        List<ReviewComment> feedback = new ArrayList<>();
+        try {
+            for (ReviewComment c : trackers.pullRequestComments(org, pr.tracker(), pr.location(), pr.number())) {
+                if (!c.resolved() && !c.postedByJuno() && !c.body().isBlank()) {
+                    feedback.add(c);
+                }
+            }
+            for (TrackerKind kind : TrackerKind.values()) {
+                ExternalRef issue = t.getRef(kind);
+                if (issue == null || !org.tracker(kind).isEnabled()) {
+                    continue;
+                }
+                for (IssueData.Comment c : trackers.getIssue(org, kind, issue.location(), issue.number(), true)
+                        .comments()) {
+                    boolean afterPr = prOpened == null
+                            || parseInstant(c.createdAt()) == null || parseInstant(c.createdAt()).isAfter(prOpened);
+                    if (afterPr && !c.body().isBlank() && !c.body().contains(ReviewComment.JUNO_MARKER)) {
+                        feedback.add(new ReviewComment("issue", 0, c.author(), c.body(), null, 0, null,
+                                c.createdAt(), false));
+                    }
+                }
+            }
+        } catch (McpException e) {
+            throw new JunoException("Could not read the review comments: " + e.getMessage(), e);
+        }
+        boolean anyNew = feedback.stream().anyMatch(c -> since == null || parseInstant(c.createdAt()) == null
+                || parseInstant(c.createdAt()).isAfter(since));
+        if (!anyNew) {
+            throw new JunoException("There are no " + (since == null ? "" : "new ") + "comments on " + pr.display()
+                    + (since == null ? "" : " since the last AI review")
+                    + ". Leave review comments on " + pr.tracker().displayName() + " first.");
+        }
+        reviewStarts.put(ticketId, Instant.now());
+        beginRun(ticketId, RunKind.REVIEW, null, new ReviewInput(feedback, since));
+        return feedback.size();
+    }
+
+    private void beginRun(String ticketId, RunKind kind, String answer, ReviewInput review) throws JunoException {
+        boolean resume = answer != null;
         Path repo;
         Path worktree;
         String base;
         String branch;
         synchronized (this) {
-            if (preparing.contains(ticketId) || runner.isRunning(ticketId)) {
+            if (preparing.contains(ticketId) || runner.isRunning(ticketId) || delivering.contains(ticketId)) {
                 throw new JunoException(ticketId + " is already starting or running");
             }
             Ticket t = require(ticketId);
@@ -290,10 +383,15 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         fireChanged();
         try {
             log(ticketId, "");
-            log(ticketId, "=== Preparing branch " + branch + " (from " + base + ") ===");
+            log(ticketId, "=== " + (kind == RunKind.REVIEW && !resume ? "AI review: preparing" : "Preparing")
+                    + " branch " + branch + " (from " + base + ") ===");
             GitWorkspace.Prepared prepared;
             try {
-                prepared = git(ticketId).prepare(repo, worktree, base, branch);
+                GitWorkspace git = git(ticketId);
+                prepared = git.prepare(repo, worktree, base, branch);
+                if (kind == RunKind.REVIEW && !resume) {
+                    git.syncWithRemote(prepared.worktree(), branch);
+                }
             } catch (GitException e) {
                 log(ticketId, "[juno] " + e.getMessage());
                 throw new JunoException("Could not prepare the ticket's branch: " + e.getMessage(), e);
@@ -305,24 +403,105 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
                 if (prepared.baseRef() != null) {
                     t.setBaseRef(prepared.baseRef());
                 }
+                t.setRunKind(kind);
+                t.setPullRequestError(null);
                 persist();
                 String session = resume ? t.getAgentSessionId() : null;
                 request = buildRequest(t, session, prepared.worktree(), tools -> {
+                    Project p = requireProjectUnchecked(t);
                     if (!resume) {
-                        return PromptBuilder.initial(t, requireProjectUnchecked(t), tools);
+                        return kind == RunKind.REVIEW
+                                ? PromptBuilder.review(t, p, review.comments(), review.newSince())
+                                : PromptBuilder.initial(t, p, tools);
                     }
-                    return session != null
-                            ? PromptBuilder.resume(t, answer)
-                            : PromptBuilder.initial(t, requireProjectUnchecked(t), tools)
-                                    + "\n## Additional guidance from a human\n" + answer.strip() + "\n";
+                    if (session != null) {
+                        return PromptBuilder.resume(t, answer);
+                    }
+                    return PromptBuilder.initial(t, p, tools)
+                            + "\n## Additional guidance from a human\n" + answer.strip() + "\n";
                 });
             }
-            launch(request);
+            launch(request, kind == RunKind.REVIEW ? TicketStatus.AI_REVIEW : TicketStatus.WORKING);
         } finally {
             synchronized (this) {
                 preparing.remove(ticketId);
             }
             fireChanged();
+        }
+        openTerminalIfEnabled(ticketId);
+    }
+
+    // ---- terminals --------------------------------------------------------------------------
+
+    private void openTerminalIfEnabled(String ticketId) {
+        JunoSettings s = settings();
+        if (consoles == null || !s.isOpenTerminals()) {
+            return;
+        }
+        try {
+            consoles.ensureOpen(ticketId, s.getTerminalCommand());
+        } catch (IOException e) {
+            log(ticketId, "[juno] could not open a terminal: " + e.getMessage());
+        }
+    }
+
+    /** Brings the ticket's agent terminal to the front, opening one if it isn't running. */
+    public String showTerminal(String ticketId) throws JunoException {
+        if (consoles == null) {
+            throw new JunoException("The agent console is unavailable (see Juno's startup output)");
+        }
+        require(ticketId);
+        try {
+            return consoles.show(ticketId, settings().getTerminalCommand());
+        } catch (IOException e) {
+            throw new JunoException("Could not open a terminal: " + e.getMessage(), e);
+        }
+    }
+
+    public boolean isTerminalOpen(String ticketId) {
+        return consoles != null && consoles.isOpen(ticketId);
+    }
+
+    /** Backend for the agent consoles. */
+    private AgentConsoles.Backend consoleBackend() {
+        return new AgentConsoles.Backend() {
+            @Override
+            public Optional<AgentConsoles.TicketState> state(String ticketId) {
+                synchronized (BoardService.this) {
+                    return ticket(ticketId).map(t -> new AgentConsoles.TicketState(
+                            t.getStatus().name(), t.getStatus().label(), t.getTitle(),
+                            t.getStatus() == TicketStatus.AWAITING_DECISION ? t.getPendingQuestion() : null,
+                            runner.isRunning(ticketId) || preparing.contains(ticketId),
+                            delivering.contains(ticketId),
+                            t.getPullRequest() == null ? null : t.getPullRequest().url(),
+                            t.getBranchName()));
+                }
+            }
+
+            @Override
+            public Path logFile(String ticketId) {
+                return store.logFile(ticketId);
+            }
+
+            @Override
+            public void answer(String ticketId, String answer) throws JunoException {
+                respond(ticketId, answer);
+            }
+        };
+    }
+
+    private static Instant parseInstant(String iso) {
+        if (iso == null || iso.isBlank()) {
+            return null;
+        }
+        try {
+            return java.time.OffsetDateTime.parse(iso).toInstant();
+        } catch (RuntimeException e) {
+            try {
+                return Instant.parse(iso);
+            } catch (RuntimeException e2) {
+                return null;
+            }
         }
     }
 
@@ -374,7 +553,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         runner.stop(ticketId);
     }
 
-    private void launch(AgentRunner.Request request) throws JunoException {
+    private void launch(AgentRunner.Request request, TicketStatus statusWhileRunning) throws JunoException {
         if (runner.isRunning(request.ticketId())) {
             throw new JunoException(request.ticketId() + " already has a running agent");
         }
@@ -385,7 +564,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
             Ticket t = require(request.ticketId());
             previousStatus = t.getStatus();
             previousQuestion = t.getPendingQuestion();
-            t.setStatus(TicketStatus.WORKING);
+            t.setStatus(statusWhileRunning);
             t.setPendingQuestion(null);
             t.touch();
             persist();
@@ -414,22 +593,32 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
 
     @Override
     public void finished(String ticketId, AgentOutcome outcome) {
-        boolean openPr = false;
+        boolean deliver = false;
         synchronized (this) {
             Optional<Ticket> found = board.getTickets().stream().filter(t -> t.getId().equals(ticketId)).findFirst();
             if (found.isEmpty()) {
                 return; // deleted while running
             }
             Ticket t = found.get();
+            RunKind kind = t.getRunKind();
             if (outcome.sessionId() != null) {
                 t.setAgentSessionId(outcome.sessionId());
             }
             switch (outcome.kind()) {
                 case COMPLETED -> {
-                    t.setStatus(TicketStatus.AI_REVIEW);
-                    t.setLastSummary(outcome.message());
+                    if (kind == RunKind.REVIEW) {
+                        t.setLastReviewSummary(outcome.message());
+                    } else {
+                        t.setLastSummary(outcome.message());
+                    }
                     t.setPendingQuestion(null);
-                    openPr = t.getWorktreePath() != null;
+                    if (t.getWorktreePath() != null) {
+                        // Stay in Working (or AI review) until the branch is pushed; delivery moves it on.
+                        deliver = true;
+                        delivering.add(ticketId);
+                    } else {
+                        t.setStatus(TicketStatus.AI_REVIEW);
+                    }
                 }
                 case NEEDS_DECISION -> {
                     t.setStatus(TicketStatus.AWAITING_DECISION);
@@ -438,10 +627,10 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
                 case FAILED -> {
                     t.setStatus(TicketStatus.AWAITING_DECISION);
                     t.setPendingQuestion("The agent failed: " + outcome.message()
-                            + "\n\nReply with guidance to retry, or move the ticket back to Pending.");
+                            + "\n\nReply with guidance to retry, or move the ticket elsewhere.");
                 }
                 case CANCELLED -> {
-                    t.setStatus(TicketStatus.PENDING);
+                    t.setStatus(kind == RunKind.REVIEW ? TicketStatus.AI_REVIEW : TicketStatus.PENDING);
                     t.setPendingQuestion(null);
                 }
             }
@@ -449,22 +638,66 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
             persist();
         }
         fireChanged();
-        if (openPr) {
-            Thread.ofPlatform().daemon().name("pr-" + ticketId).start(() -> openPullRequest(ticketId));
+        if (deliver) {
+            Thread.ofPlatform().daemon().name("deliver-" + ticketId).start(() -> deliver(ticketId));
         }
     }
 
-    // ---- pull requests ----------------------------------------------------------------------
+    // ---- delivery: push + pull request / review comment -------------------------------------
 
+    /** Whether Juno is pushing the ticket's branch / opening its PR / posting its review. */
     public boolean isOpeningPullRequest(String ticketId) {
-        return openingPr.contains(ticketId);
+        return delivering.contains(ticketId);
+    }
+
+    /** Whether an AI review agent is working on the ticket. */
+    public synchronized boolean isReviewRunning(String ticketId) {
+        return runner.isRunning(ticketId) && ticket(ticketId).map(t -> t.getRunKind() == RunKind.REVIEW).orElse(false);
     }
 
     /**
-     * Commits anything the agent left uncommitted, pushes the ticket's branch and opens a pull request (GitHub)
-     * or merge request (GitLab) into the base branch. Failures are recorded on the ticket for a retry.
+     * Finishes an agent run (also used by Retry): commits leftovers and pushes the branch, then opens the pull
+     * request (work run) or posts the review summary on it (review run). On success the ticket moves to
+     * AI review; on failure to Awaiting decision with the reason, from where it can be retried.
      */
-    public void openPullRequest(String ticketId) {
+    public void deliver(String ticketId) {
+        RunKind kind;
+        synchronized (this) {
+            Optional<Ticket> t = ticket(ticketId);
+            if (t.isEmpty() || t.get().getWorktreePath() == null) {
+                delivering.remove(ticketId);
+                return;
+            }
+            kind = t.get().getRunKind();
+            delivering.add(ticketId);
+        }
+        fireChanged();
+        try {
+            if (kind == RunKind.REVIEW) {
+                pushReview(ticketId);
+            } else {
+                openPullRequest(ticketId);
+            }
+        } catch (JunoException | GitException | McpException e) {
+            synchronized (this) {
+                ticket(ticketId).ifPresent(t -> {
+                    t.setPullRequestError(e.getMessage());
+                    t.setStatus(TicketStatus.AWAITING_DECISION);
+                    t.setPendingQuestion("Juno couldn't finish " + (kind == RunKind.REVIEW ? "the AI review" : "the ticket")
+                            + ": " + e.getMessage() + "\n\nFix the cause and use Retry, or reply here to have the "
+                            + "agent deal with it.");
+                    t.touch();
+                });
+                persist();
+            }
+            log(ticketId, "[juno] " + e.getMessage());
+        } finally {
+            delivering.remove(ticketId);
+            fireChanged();
+        }
+    }
+
+    private void openPullRequest(String ticketId) throws JunoException, GitException, McpException {
         Ticket t;
         Project project;
         Organisation org;
@@ -475,12 +708,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         String title;
         String body;
         synchronized (this) {
-            Optional<Ticket> found = ticket(ticketId);
-            if (found.isEmpty() || found.get().getWorktreePath() == null || !openingPr.add(ticketId)) {
-                return;
-            }
-            t = found.get();
-            t.setPullRequestError(null);
+            t = require(ticketId);
             project = settings.project(t.getProjectId()).orElse(null);
             org = project == null ? null : settings.organisationOf(project).orElse(null);
             worktree = Path.of(t.getWorktreePath());
@@ -489,48 +717,91 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
             baseRef = t.getBaseRef() != null ? t.getBaseRef() : base;
             title = t.getId() + ": " + t.getTitle();
             body = pullRequestBody(t);
+        }
+        if (project == null || org == null) {
+            throw new JunoException("The ticket is not linked to a project in an organisation");
+        }
+        TrackerKind kind = pullRequestTracker(t, project, org);
+        String location = project.location(kind);
+        GitWorkspace git = git(ticketId);
+        log(ticketId, "");
+        log(ticketId, "=== Pushing " + branch + " and opening a " + kind.pullRequestNoun() + " into " + base + " on "
+                + kind.displayName() + " " + location + " ===");
+        if (git.commitLeftovers(worktree, title + "\n\nChanges left uncommitted by the agent, committed by Juno.")) {
+            log(ticketId, "[juno] committed changes the agent left uncommitted");
+        }
+        if (git.commitsAhead(worktree, baseRef) == 0) {
+            throw new JunoException("There are no commits on " + branch + " beyond " + base
+                    + ", so there is nothing to open a " + kind.pullRequestNoun() + " for.");
+        }
+        git.push(worktree, branch);
+        PullRequestRef pr = trackers.createPullRequest(org, kind, location, branch, base, title,
+                body + closesLine(t, kind, location));
+        synchronized (this) {
+            if (t.getPullRequestOpenedAt() == null || t.getPullRequest() == null
+                    || t.getPullRequest().number() != pr.number()) {
+                t.setPullRequestOpenedAt(Instant.now().toString());
+            }
+            t.setPullRequest(pr);
+            t.setPullRequestError(null);
+            t.setStatus(TicketStatus.AI_REVIEW);
+            t.setPendingQuestion(null);
+            t.touch();
             persist();
         }
-        fireChanged();
-        try {
-            if (project == null || org == null) {
-                throw new JunoException("The ticket is not linked to a project in an organisation");
-            }
-            TrackerKind kind = pullRequestTracker(t, project, org);
-            String location = project.location(kind);
-            GitWorkspace git = git(ticketId);
-            log(ticketId, "");
-            log(ticketId, "=== Opening " + kind.pullRequestNoun() + ": " + branch + " -> " + base + " on "
-                    + kind.displayName() + " " + location + " ===");
-            if (git.commitLeftovers(worktree, title + "\n\nChanges left uncommitted by the agent, committed by Juno.")) {
-                log(ticketId, "[juno] committed changes the agent left uncommitted");
-            }
-            int ahead = git.commitsAhead(worktree, baseRef);
-            if (ahead == 0) {
-                throw new JunoException("There are no commits on " + branch + " beyond " + base
-                        + ", so there is nothing to open a " + kind.pullRequestNoun() + " for.");
-            }
-            git.push(worktree, branch);
-            String finalBody = body + closesLine(t, kind, location);
-            PullRequestRef pr = trackers.createPullRequest(org, kind, location, branch, base, title, finalBody);
-            synchronized (this) {
-                t.setPullRequest(pr);
-                t.setPullRequestError(null);
-                t.touch();
-                persist();
-            }
-            log(ticketId, "[juno] " + kind.pullRequestNoun() + " " + pr.display() + ": " + pr.url());
-        } catch (JunoException | GitException | McpException e) {
-            synchronized (this) {
-                t.setPullRequestError(e.getMessage());
-                t.touch();
-                persist();
-            }
-            log(ticketId, "[juno] could not open the pull request: " + e.getMessage());
-        } finally {
-            openingPr.remove(ticketId);
-            fireChanged();
+        log(ticketId, "[juno] " + kind.pullRequestNoun() + " " + pr.display() + ": " + pr.url());
+        log(ticketId, "[juno] moved to AI review");
+    }
+
+    private void pushReview(String ticketId) throws JunoException, GitException, McpException {
+        Ticket t;
+        Organisation org;
+        PullRequestRef pr;
+        Path worktree;
+        String branch;
+        String summary;
+        synchronized (this) {
+            t = require(ticketId);
+            pr = t.getPullRequest();
+            Project project = settings.project(t.getProjectId()).orElse(null);
+            org = project == null ? null : settings.organisationOf(project).orElse(null);
+            worktree = Path.of(t.getWorktreePath());
+            branch = t.getBranchName();
+            summary = t.getLastReviewSummary() == null || t.getLastReviewSummary().isBlank()
+                    ? "_The agent did not provide a summary._" : t.getLastReviewSummary().strip();
         }
+        if (pr == null || org == null) {
+            throw new JunoException("The ticket has no pull request or organisation");
+        }
+        GitWorkspace git = git(ticketId);
+        log(ticketId, "");
+        log(ticketId, "=== AI review: pushing fixes to " + pr.display() + " ===");
+        if (git.commitLeftovers(worktree, t.getId() + ": address review feedback\n\n"
+                + "Changes left uncommitted by the review agent, committed by Juno.")) {
+            log(ticketId, "[juno] committed changes the agent left uncommitted");
+        }
+        int ahead = git.commitsAhead(worktree, "origin/" + branch);
+        if (ahead > 0) {
+            git.push(worktree, branch);
+        } else {
+            log(ticketId, "[juno] the review agent made no code changes");
+        }
+        String comment = "### AI review\n\n" + summary + "\n\n"
+                + (ahead > 0 ? "_Pushed " + ahead + " commit(s) to `" + branch + "`._"
+                : "_No code changes were made._")
+                + "\n\n" + ReviewComment.JUNO_MARKER;
+        trackers.commentOnPullRequest(org, pr.tracker(), pr.location(), pr.number(), comment);
+        synchronized (this) {
+            Instant started = reviewStarts.remove(ticketId);
+            t.setLastReviewAt((started == null ? Instant.now() : started).toString());
+            t.setReviewCount(t.getReviewCount() + 1);
+            t.setPullRequestError(null);
+            t.setStatus(TicketStatus.AI_REVIEW);
+            t.setPendingQuestion(null);
+            t.touch();
+            persist();
+        }
+        log(ticketId, "[juno] posted the review summary on " + pr.display());
     }
 
     /**
@@ -812,6 +1083,9 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
     public void close() {
         runner.shutdown();
         trackers.close();
+        if (consoles != null) {
+            consoles.close();
+        }
     }
 
     /** Snapshot of tickets in a column, oldest first. */

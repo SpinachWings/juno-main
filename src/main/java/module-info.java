@@ -2,6 +2,8 @@ module dev.juno.main {
     requires javafx.controls;
     requires com.fasterxml.jackson.databind;
     requires com.fasterxml.jackson.annotation;
+    requires java.net.http;
+    requires jdk.httpserver;
 
     // Jackson maps model/store classes by field reflection.
     opens dev.juno.main.model to com.fasterxml.jackson.databind;

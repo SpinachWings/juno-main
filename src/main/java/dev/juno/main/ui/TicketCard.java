@@ -5,6 +5,7 @@ import dev.juno.main.model.ExternalRef;
 import dev.juno.main.model.Organisation;
 import dev.juno.main.model.Project;
 import dev.juno.main.model.PullRequestRef;
+import dev.juno.main.model.RunKind;
 import dev.juno.main.model.Ticket;
 import dev.juno.main.model.TicketStatus;
 import dev.juno.main.model.TrackerKind;
@@ -49,6 +50,10 @@ final class TicketCard {
         void delete(Ticket t, Window owner);
 
         void retryPullRequest(Ticket t, Window owner);
+
+        void terminal(Ticket t, Window owner);
+
+        void startReview(Ticket t, Window owner);
     }
 
     private TicketCard() {
@@ -107,31 +112,29 @@ final class TicketCard {
         }
 
         boolean running = service.isAgentRunning(ticket.getId());
+        boolean delivering = service.isOpeningPullRequest(ticket.getId());
+        boolean reviewing = service.isReviewRunning(ticket.getId());
+        PullRequestRef pr = ticket.getPullRequest();
         switch (ticket.getStatus()) {
             case WORKING -> {
-                ProgressIndicator spinner = new ProgressIndicator(-1);
-                spinner.setPrefSize(14, 14);
-                Label label = new Label(running ? "Agent working…" : "Agent not running");
-                label.getStyleClass().add("card-note");
-                HBox row = new HBox(6, spinner, label);
-                row.setAlignment(Pos.CENTER_LEFT);
-                card.getChildren().add(row);
+                if (!delivering) {
+                    card.getChildren().add(progress(running ? "Agent working…" : "Agent not running"));
+                }
             }
             case AWAITING_DECISION -> card.getChildren().add(excerpt(ticket.getPendingQuestion(), "card-question"));
             case AI_REVIEW -> {
-                if (ticket.getLastSummary() != null && !ticket.getLastSummary().isBlank()) {
+                if (reviewing) {
+                    card.getChildren().add(progress("AI review agent working…"));
+                } else if (ticket.getReviewCount() > 0 && ticket.getLastReviewSummary() != null) {
+                    card.getChildren().add(excerpt("AI review " + ticket.getReviewCount() + ": "
+                            + ticket.getLastReviewSummary(), "card-note"));
+                } else if (ticket.getLastSummary() != null && !ticket.getLastSummary().isBlank()) {
                     card.getChildren().add(excerpt(ticket.getLastSummary(), "card-note"));
                 }
             }
             case PENDING -> {
                 if (service.isPreparing(ticket.getId())) {
-                    ProgressIndicator spinner = new ProgressIndicator(-1);
-                    spinner.setPrefSize(14, 14);
-                    Label label = new Label("Preparing branch " + ticket.getBranchName() + "…");
-                    label.getStyleClass().add("card-note");
-                    HBox row = new HBox(6, spinner, label);
-                    row.setAlignment(Pos.CENTER_LEFT);
-                    card.getChildren().add(row);
+                    card.getChildren().add(progress("Preparing branch " + ticket.getBranchName() + "…"));
                 }
             }
             default -> {
@@ -145,57 +148,88 @@ final class TicketCard {
             branch.setWrapText(true);
             card.getChildren().add(branch);
         }
-        boolean openingPr = service.isOpeningPullRequest(ticket.getId());
-        PullRequestRef pr = ticket.getPullRequest();
-        if (openingPr) {
-            ProgressIndicator spinner = new ProgressIndicator(-1);
-            spinner.setPrefSize(14, 14);
-            Label label = new Label("Pushing branch and opening pull request…");
-            label.getStyleClass().add("card-note");
-            HBox row = new HBox(6, spinner, label);
-            row.setAlignment(Pos.CENTER_LEFT);
-            card.getChildren().add(row);
-        } else if (pr != null) {
-            Hyperlink prLink = new Hyperlink(pr.display() + " " + pr.location());
-            prLink.getStyleClass().add("card-link");
-            prLink.setTooltip(new Tooltip(pr.url()));
+        if (delivering) {
+            card.getChildren().add(progress(ticket.getRunKind() == RunKind.REVIEW
+                    ? "Pushing review fixes and commenting on " + (pr == null ? "the PR" : pr.display()) + "…"
+                    : "Pushing branch and opening pull request…"));
+        }
+        if (pr != null) {
+            Hyperlink prLink = new Hyperlink((pr.tracker() == TrackerKind.GITLAB ? "Merge request " : "Pull request ")
+                    + pr.display().replaceFirst("^(PR|MR) ", "") + " »");
+            prLink.getStyleClass().addAll("card-link", "card-pr-link");
+            prLink.setTooltip(new Tooltip(pr.location() + "\n" + pr.url()));
             prLink.setOnAction(e -> hostServices.showDocument(pr.url()));
             card.getChildren().add(prLink);
-        } else if (ticket.getPullRequestError() != null) {
+        } else if (ticket.getPullRequestError() != null && ticket.getStatus() != TicketStatus.AWAITING_DECISION) {
             card.getChildren().add(excerpt("PR not opened: " + ticket.getPullRequestError(), "card-agent-missing"));
         }
 
-        HBox buttons = new HBox(6);
+        FlowPane buttons = new FlowPane(6, 6);
         buttons.setAlignment(Pos.CENTER_LEFT);
         Button details = button("Details", "Full description, project link and GitLab/GitHub sync",
                 b -> actions.details(ticket, b.getScene().getWindow()));
+        Button terminal = button("Terminal", service.isTerminalOpen(ticket.getId())
+                        ? "Bring this ticket's agent terminal to the front"
+                        : "Open a terminal showing this ticket's agent (answer its questions there too)",
+                b -> actions.terminal(ticket, b.getScene().getWindow()));
+        terminal.getStyleClass().add(service.isTerminalOpen(ticket.getId()) ? "terminal-open" : "terminal-closed");
+        boolean hasTerminal = ticket.isBranchLocked();
         switch (ticket.getStatus()) {
             case PENDING -> {
                 Button start = button("Start", "Create the ticket's branch and hand the ticket to an agent",
                         b -> actions.start(ticket, b.getScene().getWindow()));
                 start.getStyleClass().add("accent");
                 start.setDisable(service.isPreparing(ticket.getId()));
-                buttons.getChildren().addAll(start, details);
+                buttons.getChildren().add(start);
+                if (hasTerminal) {
+                    buttons.getChildren().add(terminal);
+                }
+                buttons.getChildren().add(details);
             }
             case WORKING -> {
                 Button stop = button("Stop", "Stop the agent",
                         b -> actions.stop(ticket, b.getScene().getWindow()));
                 stop.setDisable(!running);
-                buttons.getChildren().addAll(logButton(ticket, actions), stop, details);
+                buttons.getChildren().addAll(terminal, logButton(ticket, actions), stop, details);
             }
             case AWAITING_DECISION -> {
                 Button respond = button("Respond", "Answer the agent and resume its session",
                         b -> actions.respond(ticket, b.getScene().getWindow()));
                 respond.getStyleClass().add("accent");
-                buttons.getChildren().addAll(respond, logButton(ticket, actions), details);
+                buttons.getChildren().add(respond);
+                if (ticket.getPullRequestError() != null && ticket.isBranchLocked()) {
+                    Button retry = button("Retry", "Commit, push and " + (ticket.getRunKind() == RunKind.REVIEW
+                                    ? "post the review again" : "open the pull request again"),
+                            b -> actions.retryPullRequest(ticket, b.getScene().getWindow()));
+                    retry.setDisable(delivering);
+                    buttons.getChildren().add(retry);
+                }
+                if (hasTerminal) {
+                    buttons.getChildren().add(terminal);
+                }
+                buttons.getChildren().addAll(logButton(ticket, actions), details);
+            }
+            case AI_REVIEW -> {
+                if (reviewing) {
+                    Button stop = button("Stop", "Stop the AI review agent",
+                            b -> actions.stop(ticket, b.getScene().getWindow()));
+                    buttons.getChildren().addAll(terminal, logButton(ticket, actions), stop, details);
+                } else {
+                    Button review = button("Start AI review", "Run an agent that reads the comments on the "
+                                    + "pull request and linked issue, makes the changes and pushes them to the PR",
+                            b -> actions.startReview(ticket, b.getScene().getWindow()));
+                    review.getStyleClass().add("accent");
+                    review.setDisable(pr == null || delivering || service.isPreparing(ticket.getId()));
+                    buttons.getChildren().add(review);
+                    if (hasTerminal) {
+                        buttons.getChildren().add(terminal);
+                    }
+                    buttons.getChildren().addAll(logButton(ticket, actions), details);
+                }
             }
             default -> {
-                if (ticket.getPullRequestError() != null && !openingPr && ticket.isBranchLocked()
-                        && ticket.getStatus() == TicketStatus.AI_REVIEW) {
-                    Button retry = button("Retry PR", "Commit, push the branch and open the pull request again",
-                            b -> actions.retryPullRequest(ticket, b.getScene().getWindow()));
-                    retry.getStyleClass().add("accent");
-                    buttons.getChildren().add(retry);
+                if (hasTerminal) {
+                    buttons.getChildren().add(terminal);
                 }
                 buttons.getChildren().addAll(logButton(ticket, actions), details);
             }
@@ -224,12 +258,25 @@ final class TicketCard {
         }
         MenuItem details = new MenuItem("Details…");
         details.setOnAction(e -> actions.details(ticket, card.getScene().getWindow()));
+        MenuItem terminal = new MenuItem("Agent terminal");
+        terminal.setOnAction(e -> actions.terminal(ticket, card.getScene().getWindow()));
         MenuItem log = new MenuItem("Agent log");
         log.setOnAction(e -> actions.log(ticket, card.getScene().getWindow()));
         MenuItem delete = new MenuItem("Delete ticket");
         delete.setDisable(running);
         delete.setOnAction(e -> actions.delete(ticket, card.getScene().getWindow()));
-        return new ContextMenu(details, log, moveTo, new SeparatorMenuItem(), delete);
+        return new ContextMenu(details, terminal, log, moveTo, new SeparatorMenuItem(), delete);
+    }
+
+    private static HBox progress(String text) {
+        ProgressIndicator spinner = new ProgressIndicator(-1);
+        spinner.setPrefSize(14, 14);
+        Label label = new Label(text);
+        label.getStyleClass().add("card-note");
+        label.setWrapText(true);
+        HBox row = new HBox(6, spinner, label);
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
     }
 
     private static Button logButton(Ticket ticket, Actions actions) {

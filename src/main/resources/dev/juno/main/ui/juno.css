@@ -667,3 +667,15 @@
 .question-text .content {
     -fx-background-color: #160E15;
 }
+
+/* ---- agent terminal + pull request links on cards ---- */
+
+.button.terminal-open {
+    -fx-border-color: -blue-soft;
+    -fx-text-fill: -blue;
+}
+
+.card-pr-link {
+    -fx-text-fill: -magenta;
+    -fx-font-size: 12px;
+}

@@ -26,6 +26,13 @@ public final class JunoSettings {
     private String javaExecutable = "";
     /** Maximum number of agents running at once across all organisations. */
     private int maxConcurrentAgents = 3;
+    /** Open a terminal window with a live agent console whenever an agent starts. */
+    private boolean openTerminals = true;
+    /**
+     * Custom command to open a terminal, with {@code {title}} and {@code {script}} placeholders; blank picks
+     * Windows Terminal / cmd, macOS Terminal or a Linux terminal emulator automatically.
+     */
+    private String terminalCommand = "";
 
     /** Settings for a fresh install: one organisation with one agent profile assigned to it. */
     public static JunoSettings createDefault() {
@@ -98,6 +105,22 @@ public final class JunoSettings {
 
     public void setMaxConcurrentAgents(int maxConcurrentAgents) {
         this.maxConcurrentAgents = maxConcurrentAgents;
+    }
+
+    public boolean isOpenTerminals() {
+        return openTerminals;
+    }
+
+    public void setOpenTerminals(boolean openTerminals) {
+        this.openTerminals = openTerminals;
+    }
+
+    public String getTerminalCommand() {
+        return terminalCommand == null ? "" : terminalCommand;
+    }
+
+    public void setTerminalCommand(String terminalCommand) {
+        this.terminalCommand = terminalCommand;
     }
 
     // ---- lookups ----------------------------------------------------------------------------

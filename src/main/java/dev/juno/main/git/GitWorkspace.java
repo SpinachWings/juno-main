@@ -154,6 +154,28 @@ public final class GitWorkspace {
         }
     }
 
+    /**
+     * Brings the worktree up to date with {@code origin/<branch>} (e.g. commits a reviewer pushed), fast-forward
+     * only. Does nothing if the branch is not on origin yet or the local branch is already ahead.
+     */
+    public void syncWithRemote(Path worktree, String branch) throws GitException {
+        Result fetch = run(worktree, NETWORK_TIMEOUT, false, "fetch", "origin", branch);
+        if (!fetch.ok() || !verify(worktree, "refs/remotes/origin/" + branch)) {
+            log.accept("[git] origin/" + branch + " not available; using the local branch as-is");
+            return;
+        }
+        String remote = "origin/" + branch;
+        if (run(worktree, LOCAL_TIMEOUT, false, "merge-base", "--is-ancestor", remote, "HEAD").ok()) {
+            return; // remote is already contained in HEAD
+        }
+        if (run(worktree, LOCAL_TIMEOUT, false, "merge-base", "--is-ancestor", "HEAD", remote).ok()) {
+            require(run(worktree, LOCAL_TIMEOUT, true, "merge", "--ff-only", remote), "git merge --ff-only");
+            return;
+        }
+        throw new GitException("Branch '" + branch + "' has diverged from " + remote
+                + "; reconcile it in " + worktree + " first");
+    }
+
     /** Pushes the branch to origin and sets its upstream. */
     public void push(Path worktree, String branch) throws GitException {
         require(run(worktree, NETWORK_TIMEOUT, true, "push", "-u", "origin", branch), "git push");
