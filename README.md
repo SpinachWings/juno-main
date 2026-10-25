@@ -12,8 +12,9 @@ A JavaFX orchestrator for Claude Code agents. Tickets move across a six-column b
 | **Done** | Finished. **Remove from Done** sends it back to Review (or Pending); **Delete** removes it from Juno. |
 
 Tickets can be imported from or uploaded to GitLab and GitHub. Juno does this through the
-[`juno-gitlab-mcp`](../juno-gitlab-mcp) and [`juno-github-mcp`](../juno-github-mcp) MCP servers, which it
-starts as child processes.
+[`juno-gitlab-mcp`](../juno-gitlab-mcp) and [`juno-github-mcp`](../juno-github-mcp) MCP servers, which
+listen on localhost ports (GitHub **9950**, GitLab **9951** by default). Juno either starts their jars itself or
+connects to servers you started from a terminal.
 
 ## Requirements
 
@@ -30,8 +31,22 @@ mvn javafx:run
 ```
 
 All GitLab/GitHub configuration (URLs and tokens) happens in Juno, per organisation, under
-**Settings → Organisations & projects**. Juno passes each organisation's token to its own MCP server process
-and never lets a `GITHUB_TOKEN` / `GITLAB_TOKEN` from its own environment through to the servers.
+**Settings → Organisations & projects**. The MCP servers store no tokens; their only setting is their port.
+Juno sends the ticket's organisation's token and API URL in the headers of every call
+(`Authorization: Bearer …`, `X-Api-Url`), so one server serves every organisation without mixing credentials.
+Nothing is taken from a `GITHUB_TOKEN` / `GITLAB_TOKEN` in Juno's own environment.
+
+### MCP servers: jar or port
+
+**Settings → General** has, for each server, a port and one of two modes:
+- **Juno starts the jar** (default): when a server is first needed, Juno checks the port. If the server is
+  already running there, Juno uses it. Otherwise it starts `java -jar <jar> --port <port>`, building the jar
+  first if it's missing, and stops it again when Juno closes.
+- **Already running on localhost**: you start the server yourself (`./run.sh` / `run.cmd` in its folder, or
+  `java -jar juno-github-mcp.jar --port 9950`) and Juno only connects to the port.
+
+Juno checks that what answers on the port really is that server. If nothing is listening, or another
+program has the port, the ticket's Start reports it.
 
 `mvn javafx:jlink` builds a self-contained runtime image with a `juno` launcher in `target/juno`.
 
@@ -43,8 +58,8 @@ Organisation   GitLab / GitHub integration (URL + token), default agent
      └─ Ticket optional agent
 ```
 
-- **Organisations** are credential boundaries. Each one runs its own GitLab/GitHub MCP server process with
-  only its own token. An agent only ever gets its ticket's organisation's servers.
+- **Organisations** are credential boundaries. Each call to an MCP server carries only that organisation's
+  token, and an agent's MCP config only ever contains its ticket's organisation's token.
 - **Agent profiles** (Claude instance, model, permissions) are defined once under **Settings → Agents**.
   They can be assigned to an organisation, a project or a ticket. The most specific one wins:
   **ticket → project → organisation**.
@@ -74,8 +89,9 @@ previous file is kept as `settings.pre-single-host.json`.
 2. **Settings → Agents**: create agent profiles. Each sets the Claude Code program, model, permission
    mode, allowed tools, max turns, and an optional API key or server URL. Leave the key blank to use your
    existing `claude` login.
-3. **Settings → General**: the MCP jar paths (filled in automatically when the repos sit side by side, and
-   built automatically if missing), the Java runtime for them, and the overall limit on concurrent agents.
+3. **Settings → General**: for each MCP server, its port and whether Juno starts the jar or connects to a
+   server you run (see above); the jar paths (filled in automatically when the repos sit side by side, and
+   built automatically if missing); the Java runtime for them; and the overall limit on concurrent agents.
 4. Use **+ New ticket** or **Import issue**. Import asks for the organisation and project first, because
    their credentials are used. On a card, **Details** opens the ticket menu:
    - edit the title and full description
@@ -266,7 +282,8 @@ Everything is stored in `~/.juno` (override with the `JUNO_HOME` environment var
   keys typed into Settings are stored here in plain text.** Prefer `env:VARIABLE` references (for example
   `env:ACME_GITLAB_TOKEN`), which are read from Juno's environment when needed.
 - `logs/<ticket>.log`: agent activity
-- `agent-mcp/<ticket>.json`: per-run MCP config for agents (only that ticket's organisation's servers)
+- `agent-mcp/<ticket>.json`: per-run MCP config for agents (the project's host server on its port, with only
+  that ticket's organisation's token)
 - `worktrees/<ticket>/`: the git worktree each ticket's agent works in
 - `runs/<ticket>/`: the journal and prompt of every agent run, used to resume interrupted work
 - `consoles/`: the scripts that open each ticket's terminal; `console.token` secures the console API
@@ -278,8 +295,8 @@ dev.juno.main
 ├── JunoApp              JavaFX entry point
 ├── model                Organisation, Project, Ticket, AgentProfile, settings + agent resolution
 ├── store                JSON persistence in ~/.juno
-├── mcp                  stdio MCP client
-├── integration          GitLab/GitHub via per-organisation MCP server processes
+├── mcp                  MCP client (HTTP, localhost)
+├── integration          GitLab/GitHub via the MCP servers (started by Juno or already running)
 ├── agent                Claude Code process runner, stream-json parser, prompts
 ├── git                  worktree/branch preparation, commit, push
 ├── console              agent terminals: local console API, terminal launcher, console client

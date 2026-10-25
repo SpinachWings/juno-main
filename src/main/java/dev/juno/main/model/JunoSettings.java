@@ -19,9 +19,18 @@ public final class JunoSettings {
     private List<Project> projects = new ArrayList<>();
     private List<AgentProfile> agentProfiles = new ArrayList<>();
 
-    /** MCP server jars are shared code; each organisation runs its own instance with its own credentials. */
+    /**
+     * The MCP servers listen on localhost ports and hold no credentials (Juno sends each organisation's token
+     * with every call). Juno either starts their jars on those ports or connects to servers already running.
+     */
     private String gitlabMcpJar = defaultJar("juno-gitlab-mcp");
     private String githubMcpJar = defaultJar("juno-github-mcp");
+    private McpLaunch gitlabMcpLaunch = McpLaunch.JAR;
+    private McpLaunch githubMcpLaunch = McpLaunch.JAR;
+    public static final int DEFAULT_GITHUB_MCP_PORT = 9950;
+    public static final int DEFAULT_GITLAB_MCP_PORT = 9951;
+    private int githubMcpPort = DEFAULT_GITHUB_MCP_PORT;
+    private int gitlabMcpPort = DEFAULT_GITLAB_MCP_PORT;
     /** Java executable used to launch the MCP servers; blank means the JVM running Juno. */
     private String javaExecutable = "";
     /** Maximum number of agents running at once across all organisations. */
@@ -108,6 +117,33 @@ public final class JunoSettings {
             gitlabMcpJar = jar;
         } else {
             githubMcpJar = jar;
+        }
+    }
+
+    public McpLaunch mcpLaunch(TrackerKind kind) {
+        McpLaunch l = kind == TrackerKind.GITLAB ? gitlabMcpLaunch : githubMcpLaunch;
+        return l == null ? McpLaunch.JAR : l;
+    }
+
+    public void setMcpLaunch(TrackerKind kind, McpLaunch launch) {
+        if (kind == TrackerKind.GITLAB) {
+            gitlabMcpLaunch = launch;
+        } else {
+            githubMcpLaunch = launch;
+        }
+    }
+
+    public int mcpPort(TrackerKind kind) {
+        int port = kind == TrackerKind.GITLAB ? gitlabMcpPort : githubMcpPort;
+        return port > 0 && port <= 65535 ? port
+                : kind == TrackerKind.GITLAB ? DEFAULT_GITLAB_MCP_PORT : DEFAULT_GITHUB_MCP_PORT;
+    }
+
+    public void setMcpPort(TrackerKind kind, int port) {
+        if (kind == TrackerKind.GITLAB) {
+            gitlabMcpPort = port;
+        } else {
+            githubMcpPort = port;
         }
     }
 

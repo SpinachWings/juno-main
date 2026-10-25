@@ -1,7 +1,6 @@
 package dev.juno.main.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import dev.juno.main.agent.AgentOutcome;
 import dev.juno.main.agent.AgentRunner;
@@ -13,6 +12,7 @@ import dev.juno.main.git.GitException;
 import dev.juno.main.git.GitWorkspace;
 import dev.juno.main.integration.IssueData;
 import dev.juno.main.integration.IssueTrackerService;
+import dev.juno.main.integration.McpServers;
 import dev.juno.main.integration.ReviewComment;
 import dev.juno.main.mcp.McpException;
 import dev.juno.main.model.ActiveRun;
@@ -65,6 +65,8 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
     private JunoSettings settings;
     private final AgentRunner runner;
     private final IssueTrackerService trackers;
+    /** The GitLab / GitHub MCP servers on their localhost ports (started by Juno or by you). */
+    private final McpServers mcpServers;
     private final List<ChangeListener> changeListeners = new CopyOnWriteArrayList<>();
     private final List<LogListener> logListeners = new CopyOnWriteArrayList<>();
     private final List<String> trackerLog = new CopyOnWriteArrayList<>();
@@ -86,7 +88,8 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         this.settings = store.loadSettings();
         this.board = store.loadBoard();
         this.runner = new AgentRunner(this);
-        this.trackers = new IssueTrackerService(this::settings, this::trackerLog);
+        this.mcpServers = new McpServers(this::trackerLog);
+        this.trackers = new IssueTrackerService(this::settings, mcpServers);
         this.skills = new SkillLibrary(store.home());
         if (skills.installBundled(settings)) {
             store.saveSettings(settings);
@@ -1333,32 +1336,25 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
     }
 
     /**
-     * Writes a per-ticket MCP config containing only the ticket's organisation's tracker servers, so an
-     * agent can never use another organisation's credentials. Returns null if nothing is available.
+     * Writes a per-ticket MCP config listing the tracker server for the ticket's project host, with that organisation's
+     * credentials in the request headers, so an agent can never use another organisation's credentials. Returns
+     * null if nothing is available.
      */
     private Path writeAgentMcpConfig(Ticket ticket, Organisation org) throws JunoException {
         ObjectMapper mapper = store.mapper();
         ObjectNode root = mapper.createObjectNode();
         ObjectNode servers = root.putObject("mcpServers");
+        // Only the project's own host: its server is already running (the start checks talked to it).
+        TrackerKind host = settings.project(ticket.getProjectId()).map(Project::host).orElse(null);
         for (TrackerKind kind : TrackerKind.values()) {
-            if (!org.tracker(kind).isEnabled()) {
+            if (kind != host || !org.tracker(kind).isEnabled()) {
                 continue;
             }
-            List<String> command;
-            try {
-                command = IssueTrackerService.command(settings, kind);
-            } catch (McpException e) {
-                continue; // jar not built/configured; skip this tracker
-            }
             ObjectNode server = servers.putObject(kind == TrackerKind.GITLAB ? "juno-gitlab" : "juno-github");
-            server.put("type", "stdio");
-            server.put("command", command.getFirst());
-            ArrayNode args = server.putArray("args");
-            command.subList(1, command.size()).forEach(args::add);
-            ObjectNode env = server.putObject("env");
-            for (Map.Entry<String, String> e : IssueTrackerService.environment(org, kind).entrySet()) {
-                env.put(e.getKey(), e.getValue());
-            }
+            server.put("type", "http");
+            server.put("url", McpServers.endpoint(settings, kind).toString());
+            ObjectNode headers = server.putObject("headers");
+            IssueTrackerService.headers(org, kind).forEach(headers::put);
         }
         if (servers.isEmpty()) {
             return null;
@@ -1508,7 +1504,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
     public List<String> testTracker(JunoSettings candidate, String orgId, TrackerKind kind) throws JunoException {
         Organisation org = candidate.organisation(orgId)
                 .orElseThrow(() -> new JunoException("Unknown organisation"));
-        try (IssueTrackerService probe = new IssueTrackerService(() -> candidate, this::trackerLog)) {
+        try (IssueTrackerService probe = new IssueTrackerService(() -> candidate, mcpServers)) {
             return probe.test(org, kind);
         } catch (McpException e) {
             throw new JunoException(e.getMessage(), e);
@@ -1581,6 +1577,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
     public void close() {
         runner.shutdown();
         trackers.close();
+        mcpServers.close();
         if (consoles != null) {
             consoles.close();
         }

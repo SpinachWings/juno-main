@@ -66,21 +66,28 @@ class PullRequestTargetTest {
     }
 
     @Test
-    void mcpServersOnlyGetTokensFromJuno() {
+    void credentialsTravelInRequestHeadersFromJunosSettingsOnly() {
         Organisation org = new Organisation("Acme");
-        Map<String, String> env = IssueTrackerService.environment(org, TrackerKind.GITHUB);
-        // Blank token: set explicitly to "" so a GITHUB_TOKEN / GH_TOKEN in Juno's environment is never inherited.
-        assertEquals("", env.get("GITHUB_TOKEN"));
-        assertEquals("", env.get("GH_TOKEN"));
-        assertEquals("https://api.github.com", env.get("GITHUB_API_URL"));
+        // No token: no Authorization header, so the server can read public data only.
+        assertFalse(IssueTrackerService.headers(org, TrackerKind.GITHUB).containsKey("Authorization"));
         assertFalse(IssueTrackerService.hasToken(org, TrackerKind.GITHUB));
 
         org.tracker(TrackerKind.GITLAB).setToken("glpat-123");
         org.tracker(TrackerKind.GITLAB).setApiUrl("https://git.acme.dev");
-        env = IssueTrackerService.environment(org, TrackerKind.GITLAB);
-        assertEquals("glpat-123", env.get("GITLAB_TOKEN"));
-        assertEquals("https://git.acme.dev", env.get("GITLAB_URL"));
+        Map<String, String> headers = IssueTrackerService.headers(org, TrackerKind.GITLAB);
+        assertEquals("Bearer glpat-123", headers.get("Authorization"));
+        assertEquals("https://git.acme.dev", headers.get("X-Api-Url"));
         assertTrue(IssueTrackerService.hasToken(org, TrackerKind.GITLAB));
+    }
+
+    @Test
+    void mcpPortsDefaultTo9950And9951() {
+        JunoSettings s = new JunoSettings();
+        assertEquals(9950, s.mcpPort(TrackerKind.GITHUB));
+        assertEquals(9951, s.mcpPort(TrackerKind.GITLAB));
+        assertEquals(dev.juno.main.model.McpLaunch.JAR, s.mcpLaunch(TrackerKind.GITHUB));
+        assertEquals("http://127.0.0.1:9951/mcp",
+                dev.juno.main.integration.McpServers.endpoint(s, TrackerKind.GITLAB).toString());
     }
 
     private interface Call {

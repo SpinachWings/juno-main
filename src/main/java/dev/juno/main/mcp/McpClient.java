@@ -4,76 +4,62 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
+import java.net.ConnectException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.Consumer;
 
 /**
- * Model Context Protocol client for a server launched as a child process (stdio transport,
- * newline-delimited JSON-RPC 2.0).
+ * Model Context Protocol client for a server on a localhost port (MCP over HTTP, JSON responses). The caller's
+ * credentials go in the request headers of every call; the server itself holds none.
  */
-public final class McpClient implements AutoCloseable {
+public final class McpClient {
 
     public static final String PROTOCOL_VERSION = "2025-06-18";
     private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(60);
+    private static final HttpClient HTTP = HttpClient.newBuilder()
+            .proxy(HttpClient.Builder.NO_PROXY) // always localhost
+            .connectTimeout(Duration.ofSeconds(5))
+            .build();
 
-    private final List<String> command;
-    private final Map<String, String> environment;
-    private final Consumer<String> stderrSink;
+    private final URI endpoint;
+    private final Map<String, String> headers;
     private final ObjectMapper mapper = new ObjectMapper();
-    private final Map<Long, CompletableFuture<JsonNode>> pending = new ConcurrentHashMap<>();
     private final AtomicLong ids = new AtomicLong();
-
-    private Process process;
-    private OutputStream stdin;
     private volatile String serverName = "?";
+    private volatile String sessionId;
+    private volatile boolean initialized;
 
-    public McpClient(List<String> command, Map<String, String> environment, Consumer<String> stderrSink) {
-        this.command = List.copyOf(command);
-        this.environment = Map.copyOf(environment);
-        this.stderrSink = stderrSink;
+    /**
+     * @param endpoint e.g. {@code http://127.0.0.1:9950/mcp}
+     * @param headers  sent with every request (Authorization, X-Api-Url)
+     */
+    public McpClient(URI endpoint, Map<String, String> headers) {
+        this.endpoint = endpoint;
+        this.headers = Map.copyOf(headers);
     }
 
-    /** Starts the server process and performs the initialize handshake. */
+    /** Performs the initialize handshake (once). */
     public synchronized void start() throws McpException {
-        if (process != null) {
+        if (initialized) {
             return;
         }
-        try {
-            ProcessBuilder pb = new ProcessBuilder(command);
-            pb.environment().putAll(environment);
-            process = pb.start();
-        } catch (IOException e) {
-            throw new McpException("Could not start MCP server " + command + ": " + e.getMessage(), e);
-        }
-        stdin = process.getOutputStream();
-        Thread.ofPlatform().daemon().name("mcp-stdout-" + process.pid()).start(this::readLoop);
-        Thread.ofPlatform().daemon().name("mcp-stderr-" + process.pid()).start(this::drainStderr);
-
         ObjectNode params = mapper.createObjectNode();
         params.put("protocolVersion", PROTOCOL_VERSION);
         params.putObject("capabilities");
-        params.putObject("clientInfo").put("name", "juno-main").put("version", "0.1.0");
+        params.putObject("clientInfo").put("name", "juno-main").put("version", "0.3.0");
         JsonNode result = request("initialize", params, Duration.ofSeconds(30));
         serverName = result.path("serverInfo").path("name").asText("?");
-        notify("notifications/initialized", null);
-    }
-
-    public boolean isAlive() {
-        return process != null && process.isAlive();
+        notifyServer("notifications/initialized");
+        initialized = true;
     }
 
     public String serverName() {
@@ -120,136 +106,85 @@ public final class McpClient implements AutoCloseable {
     }
 
     public JsonNode request(String method, JsonNode params, Duration timeout) throws McpException {
-        long id = ids.incrementAndGet();
-        CompletableFuture<JsonNode> future = new CompletableFuture<>();
-        pending.put(id, future);
         ObjectNode message = mapper.createObjectNode();
         message.put("jsonrpc", "2.0");
-        message.put("id", id);
+        message.put("id", ids.incrementAndGet());
         message.put("method", method);
         if (params != null) {
             message.set("params", params);
         }
-        try {
-            send(message);
-            JsonNode response = future.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
-            if (response.has("error")) {
-                JsonNode error = response.get("error");
-                throw new McpException("MCP error " + error.path("code").asInt() + ": "
-                        + error.path("message").asText());
-            }
-            return response.path("result");
-        } catch (TimeoutException e) {
-            throw new McpException("Timed out waiting for " + method + " from " + serverName, e);
-        } catch (ExecutionException e) {
-            throw new McpException(e.getCause().getMessage(), e.getCause());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new McpException("Interrupted waiting for " + method, e);
-        } finally {
-            pending.remove(id);
+        HttpResponse<String> response = post(message, timeout);
+        if (response.statusCode() != 200) {
+            throw new McpException("MCP server at " + endpoint + " answered HTTP " + response.statusCode()
+                    + " to " + method + describe(response.body()));
         }
+        JsonNode body;
+        try {
+            body = mapper.readTree(response.body());
+        } catch (IOException e) {
+            throw new McpException("MCP server at " + endpoint + " sent an unreadable reply to " + method, e);
+        }
+        if (body.has("error")) {
+            JsonNode error = body.get("error");
+            throw new McpException(error.isObject()
+                    ? "MCP error " + error.path("code").asInt() + ": " + error.path("message").asText()
+                    : error.asText());
+        }
+        return body.path("result");
     }
 
-    private void notify(String method, JsonNode params) throws McpException {
+    private void notifyServer(String method) throws McpException {
         ObjectNode message = mapper.createObjectNode();
         message.put("jsonrpc", "2.0");
         message.put("method", method);
-        if (params != null) {
-            message.set("params", params);
-        }
-        send(message);
+        post(message, Duration.ofSeconds(10));
     }
 
-    private void send(JsonNode message) throws McpException {
-        if (!isAlive()) {
-            throw new McpException("MCP server is not running");
-        }
+    private HttpResponse<String> post(JsonNode message, Duration timeout) throws McpException {
+        HttpRequest.Builder request;
         try {
-            synchronized (this) {
-                stdin.write(mapper.writeValueAsBytes(message));
-                stdin.write('\n');
-                stdin.flush();
-            }
+            request = HttpRequest.newBuilder(endpoint)
+                    .timeout(timeout)
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "application/json, text/event-stream")
+                    .header("MCP-Protocol-Version", PROTOCOL_VERSION)
+                    .POST(HttpRequest.BodyPublishers.ofByteArray(mapper.writeValueAsBytes(message)));
         } catch (IOException e) {
-            throw new McpException("Could not write to MCP server: " + e.getMessage(), e);
+            throw new McpException("Could not encode an MCP request: " + e.getMessage(), e);
         }
-    }
-
-    private void readLoop() {
-        try (var reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                if (line.isBlank()) {
-                    continue;
-                }
-                JsonNode message;
-                try {
-                    message = mapper.readTree(line);
-                } catch (IOException e) {
-                    stderrSink.accept("[mcp] ignoring non-JSON output: " + line);
-                    continue;
-                }
-                JsonNode id = message.get("id");
-                if (message.has("method")) {
-                    // Server-initiated request or notification. We advertise no client capabilities.
-                    if (id != null && !id.isNull()) {
-                        ObjectNode reply = mapper.createObjectNode();
-                        reply.put("jsonrpc", "2.0");
-                        reply.set("id", id);
-                        reply.putObject("error").put("code", -32601).put("message", "Not supported by juno-main");
-                        try {
-                            send(reply);
-                        } catch (McpException ignored) {
-                            // server is going away
-                        }
-                    }
-                    continue;
-                }
-                if (id != null && id.canConvertToLong()) {
-                    CompletableFuture<JsonNode> future = pending.get(id.asLong());
-                    if (future != null) {
-                        future.complete(message);
-                    }
-                }
-            }
+        headers.forEach(request::header);
+        String session = sessionId;
+        if (session != null) {
+            request.header("Mcp-Session-Id", session);
+        }
+        try {
+            HttpResponse<String> response = HTTP.send(request.build(),
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            response.headers().firstValue("Mcp-Session-Id").ifPresent(id -> sessionId = id);
+            return response;
+        } catch (ConnectException e) {
+            throw new McpException("No MCP server is answering at " + endpoint, e);
         } catch (IOException e) {
-            stderrSink.accept("[mcp] read failed: " + e.getMessage());
-        } finally {
-            McpException gone = new McpException("MCP server " + serverName + " exited");
-            pending.values().forEach(f -> f.completeExceptionally(gone));
-        }
-    }
-
-    private void drainStderr() {
-        try (var reader = new BufferedReader(new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                stderrSink.accept(line);
-            }
-        } catch (IOException ignored) {
-            // process ended
-        }
-    }
-
-    @Override
-    public synchronized void close() {
-        if (process == null) {
-            return;
-        }
-        try {
-            stdin.close();
-        } catch (IOException ignored) {
-            // already closed
-        }
-        try {
-            if (!process.waitFor(2, TimeUnit.SECONDS)) {
-                process.destroy();
-            }
+            throw new McpException("MCP request to " + endpoint + " failed: " + e.getMessage(), e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            process.destroyForcibly();
+            throw new McpException("Interrupted calling " + endpoint, e);
         }
-        process = null;
+    }
+
+    private String describe(String body) {
+        if (body == null || body.isBlank()) {
+            return "";
+        }
+        try {
+            JsonNode node = mapper.readTree(body);
+            if (node.hasNonNull("error")) {
+                return ": " + (node.get("error").isObject() ? node.get("error").path("message").asText()
+                        : node.get("error").asText());
+            }
+        } catch (IOException ignored) {
+            // not JSON
+        }
+        return ": " + (body.length() > 200 ? body.substring(0, 200) : body);
     }
 }

@@ -2,6 +2,7 @@ package dev.juno.main.ui;
 
 import dev.juno.main.model.AgentProfile;
 import dev.juno.main.model.JunoSettings;
+import dev.juno.main.model.McpLaunch;
 import dev.juno.main.model.Organisation;
 import dev.juno.main.model.Project;
 import dev.juno.main.model.SkillEntry;
@@ -123,6 +124,8 @@ final class SettingsDialog extends Dialog<JunoSettings> {
 
     // ---- general ----
     private final Map<TrackerKind, TextField> mcpJar = new EnumMap<>(TrackerKind.class);
+    private final Map<TrackerKind, ComboBox<McpLaunch>> mcpLaunch = new EnumMap<>(TrackerKind.class);
+    private final Map<TrackerKind, TextField> mcpPort = new EnumMap<>(TrackerKind.class);
     private final TextField javaExecutable = new TextField();
     private final Spinner<Integer> maxAgents = new Spinner<>(1, 32, 3);
     private final TextField designDocFolder = new TextField();
@@ -193,6 +196,19 @@ final class SettingsDialog extends Dialog<JunoSettings> {
     /** Problems that would stop projects from working; Save is refused until they are fixed. */
     private List<String> validate() {
         List<String> problems = new ArrayList<>();
+        java.util.Set<Integer> ports = new java.util.HashSet<>();
+        for (TrackerKind kind : TrackerKind.values()) {
+            String text = mcpPort.get(kind).getText().strip();
+            int port = text.isEmpty() ? -1 : Integer.parseInt(text);
+            if (port < 1024 || port > 65535) {
+                problems.add("The " + kind.displayName() + " MCP port must be between 1024 and 65535.");
+            } else if (!ports.add(port)) {
+                problems.add("The GitHub and GitLab MCP servers need different ports.");
+            }
+            if (mcpLaunch.get(kind).getValue() == McpLaunch.JAR && mcpJar.get(kind).getText().isBlank()) {
+                problems.add("Set the " + kind.displayName() + " MCP jar, or choose 'Already running on localhost'.");
+            }
+        }
         java.util.regex.Pattern githubRepo = java.util.regex.Pattern.compile("[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+");
         java.util.regex.Pattern gitlabProject = java.util.regex.Pattern.compile("([^/\\s]+/)+[^/\\s]+|\\d+");
         for (Project p : working.getProjects()) {
@@ -789,10 +805,36 @@ final class SettingsDialog extends Dialog<JunoSettings> {
         int row = 0;
         grid.add(sectionTitle("MCP servers"), 0, row++, 2, 1);
         for (TrackerKind kind : TrackerKind.values()) {
+            ComboBox<McpLaunch> launch = new ComboBox<>();
+            launch.getItems().setAll(McpLaunch.values());
+            launch.setConverter(new javafx.util.StringConverter<>() {
+                @Override
+                public String toString(McpLaunch l) {
+                    return l == null ? "" : l.label();
+                }
+
+                @Override
+                public McpLaunch fromString(String text) {
+                    return null;
+                }
+            });
+            launch.setValue(working.mcpLaunch(kind));
+            TextField port = new TextField(Integer.toString(working.mcpPort(kind)));
+            port.setPrefColumnCount(6);
+            port.setTextFormatter(new javafx.scene.control.TextFormatter<String>(
+                    change -> change.getControlNewText().matches("\\d{0,5}") ? change : null));
             TextField jar = new TextField(working.mcpJar(kind));
+            Button browse = fileBrowse(jar, kind.displayName() + " MCP server jar");
+            jar.disableProperty().bind(launch.valueProperty().isEqualTo(McpLaunch.PORT));
+            browse.disableProperty().bind(launch.valueProperty().isEqualTo(McpLaunch.PORT));
+            mcpLaunch.put(kind, launch);
+            mcpPort.put(kind, port);
             mcpJar.put(kind, jar);
-            HBox jarRow = new HBox(6, jar, fileBrowse(jar, kind.displayName() + " MCP server jar"));
+            HBox launchRow = new HBox(8, launch, new Label("Port"), port);
+            launchRow.setAlignment(Pos.CENTER_LEFT);
+            HBox jarRow = new HBox(6, jar, browse);
             HBox.setHgrow(jar, Priority.ALWAYS);
+            grid.addRow(row++, new Label(kind.displayName() + " MCP server"), launchRow);
             grid.addRow(row++, new Label(kind.displayName() + " MCP jar"), jarRow);
         }
         javaExecutable.setText(working.getJavaExecutable());
@@ -800,9 +842,12 @@ final class SettingsDialog extends Dialog<JunoSettings> {
         HBox javaRow = new HBox(6, javaExecutable, fileBrowse(javaExecutable, "Java executable"));
         HBox.setHgrow(javaExecutable, Priority.ALWAYS);
         grid.addRow(row++, new Label("Java for MCP servers"), javaRow);
-        grid.add(hint("The servers need no setup of their own: if a jar is missing, Juno builds it (mvn package) "
-                + "the first time it's needed. The same jars serve every organisation; each organisation gets its "
-                + "own server process with only the token set for it here in Juno."), 1, row++);
+        grid.add(hint("Each server listens on its port on this computer (defaults: GitHub "
+                + JunoSettings.DEFAULT_GITHUB_MCP_PORT + ", GitLab " + JunoSettings.DEFAULT_GITLAB_MCP_PORT + "). "
+                + "'Juno starts the jar' runs it for you (and builds the jar first if it's missing); 'Already "
+                + "running on localhost' connects to a server you started yourself, e.g. with run.sh / run.cmd or "
+                + "'java -jar <jar> --port <port>'. The servers store no tokens: Juno sends each organisation's "
+                + "token with every call, so one server serves all organisations."), 1, row++);
         grid.add(sectionTitle("Agents"), 0, row++, 2, 1);
         maxAgents.getValueFactory().setValue(Math.max(1, working.getMaxConcurrentAgents()));
         grid.addRow(row++, new Label("Max concurrent agents"), maxAgents);
@@ -1038,6 +1083,8 @@ final class SettingsDialog extends Dialog<JunoSettings> {
     private void commitGeneral() {
         for (TrackerKind kind : TrackerKind.values()) {
             working.setMcpJar(kind, mcpJar.get(kind).getText().strip());
+            working.setMcpLaunch(kind, mcpLaunch.get(kind).getValue());
+            working.setMcpPort(kind, Integer.parseInt(mcpPort.get(kind).getText().strip()));
         }
         working.setJavaExecutable(javaExecutable.getText().strip());
         working.setMaxConcurrentAgents(maxAgents.getValue());

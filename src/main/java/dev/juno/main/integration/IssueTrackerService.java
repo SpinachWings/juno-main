@@ -11,33 +11,33 @@ import dev.juno.main.model.PullRequestRef;
 import dev.juno.main.model.TrackerKind;
 import dev.juno.main.model.TrackerSettings;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
- * Talks to GitLab and GitHub exclusively through the juno-gitlab-mcp / juno-github-mcp servers. Each
- * organisation gets its own server process per tracker, holding only that organisation's credentials.
- * Processes start lazily and stay alive until settings change or Juno exits.
+ * Talks to GitLab and GitHub exclusively through the juno-gitlab-mcp / juno-github-mcp servers, which listen on
+ * localhost ports (see {@link McpServers}). The servers hold no credentials: every call carries the ticket's
+ * organisation's token and API URL in its headers, so organisations never share credentials.
  */
 public final class IssueTrackerService implements AutoCloseable {
 
     private record Key(String orgId, TrackerKind kind) {
     }
 
-    private final Supplier<JunoSettings> settings;
-    private final Consumer<String> serverLog;
-    private final ObjectMapper mapper = new ObjectMapper();
-    private final Map<Key, McpClient> clients = new HashMap<>();
+    private record Connection(McpClient client, java.net.URI endpoint, Map<String, String> headers) {
+    }
 
-    public IssueTrackerService(Supplier<JunoSettings> settings, Consumer<String> serverLog) {
+    private final Supplier<JunoSettings> settings;
+    private final McpServers servers;
+    private final ObjectMapper mapper = new ObjectMapper();
+    private final Map<Key, Connection> clients = new HashMap<>();
+
+    public IssueTrackerService(Supplier<JunoSettings> settings, McpServers servers) {
         this.settings = settings;
-        this.serverLog = serverLog;
+        this.servers = servers;
     }
 
     public IssueData getIssue(Organisation org, TrackerKind kind, String location, long number,
@@ -129,20 +129,20 @@ public final class IssueTrackerService implements AutoCloseable {
                 r.has("branchExists") ? r.get("branchExists").asBoolean() : null);
     }
 
-    /** Starts (if needed) the organisation's server and returns its tool names; used by Settings' "Test". */
+    /** Connects to (starting if needed) the tracker's server and returns its tool names; Settings' "Test". */
     public List<String> test(Organisation org, TrackerKind kind) throws McpException {
         return client(org, kind).listTools();
     }
 
-    /** Stops running servers so the next call picks up new settings. */
+    /** Forgets connections (and stops servers Juno started whose port or jar changed) after a settings change. */
     public synchronized void reset() {
-        clients.values().forEach(McpClient::close);
         clients.clear();
+        servers.reconcile(settings.get());
     }
 
     @Override
-    public void close() {
-        reset();
+    public synchronized void close() {
+        clients.clear();
     }
 
     private ObjectNode args(TrackerKind kind, String location) throws McpException {
@@ -154,26 +154,22 @@ public final class IssueTrackerService implements AutoCloseable {
         return args;
     }
 
-    private synchronized McpClient client(Organisation org, TrackerKind kind) throws McpException {
+    private McpClient client(Organisation org, TrackerKind kind) throws McpException {
         requireEnabled(org, kind);
+        java.net.URI endpoint = servers.ensure(settings.get(), kind);
+        Map<String, String> headers = headers(org, kind);
         Key key = new Key(org.getId(), kind);
-        McpClient existing = clients.get(key);
-        if (existing != null && existing.isAlive()) {
-            return existing;
+        synchronized (this) {
+            Connection existing = clients.get(key);
+            if (existing != null && existing.endpoint().equals(endpoint) && existing.headers().equals(headers)) {
+                return existing.client();
+            }
         }
-        if (existing != null) {
-            existing.close();
+        McpClient client = new McpClient(endpoint, headers);
+        client.start();
+        synchronized (this) {
+            clients.put(key, new Connection(client, endpoint, headers));
         }
-        JunoSettings s = settings.get();
-        McpClient client = new McpClient(command(s, kind), environment(org, kind),
-                line -> serverLog.accept("[" + org.getName() + " / " + kind.displayName() + " MCP] " + line));
-        try {
-            client.start();
-        } catch (McpException e) {
-            client.close();
-            throw e;
-        }
-        clients.put(key, client);
         return client;
     }
 
@@ -185,44 +181,22 @@ public final class IssueTrackerService implements AutoCloseable {
     }
 
     /**
-     * Command line used to launch the MCP server for a tracker. Also used for agents' MCP config. If the jar
-     * hasn't been built yet but its project is next to it (the usual {@code juno/<server>/target/<server>.jar}
-     * layout), it is built with Maven first, so the servers need no setup.
+     * Request headers carrying an organisation's credentials to the tracker's MCP server: its token
+     * ({@code Authorization: Bearer}) and API / instance URL ({@code X-Api-Url}). These come only from Juno's
+     * settings; nothing is read from Juno's own environment except a variable named with {@code env:VAR}.
      */
-    public static List<String> command(JunoSettings s, TrackerKind kind) throws McpException {
-        String jar = s.mcpJar(kind);
-        String artifact = kind == TrackerKind.GITLAB ? "juno-gitlab-mcp" : "juno-github-mcp";
-        if (jar == null || jar.isBlank()) {
-            throw new McpException("No path is set for the " + kind.displayName() + " MCP server (" + artifact
-                    + ".jar). Set it in Settings → General.");
-        }
-        Path jarPath = Path.of(jar.trim());
-        if (!Files.isRegularFile(jarPath)) {
-            McpJars.build(jarPath, artifact);
-        }
-        return List.of(javaExecutable(s), "-jar", jarPath.toString());
-    }
-
-    /**
-     * Environment for an organisation's MCP server process: the organisation's token and API URL from Juno's
-     * settings, and nothing inherited. Every variable the servers read is set explicitly (blank when unset), so
-     * a GITHUB_TOKEN / GITLAB_TOKEN in Juno's own environment can never leak into another organisation's server.
-     * {@code env:VAR} as the token reads it from a variable you name, which is still configured in Juno.
-     */
-    public static Map<String, String> environment(Organisation org, TrackerKind kind) {
+    public static Map<String, String> headers(Organisation org, TrackerKind kind) {
         TrackerSettings t = org.tracker(kind);
-        Map<String, String> env = new HashMap<>();
-        String url = t.getApiUrl() == null ? "" : t.getApiUrl().trim();
+        Map<String, String> headers = new java.util.TreeMap<>();
         String token = t.resolvedToken();
-        if (kind == TrackerKind.GITLAB) {
-            env.put("GITLAB_URL", url.isEmpty() ? "https://gitlab.com" : url);
-            env.put("GITLAB_TOKEN", token == null ? "" : token);
-        } else {
-            env.put("GITHUB_API_URL", url.isEmpty() ? "https://api.github.com" : url);
-            env.put("GITHUB_TOKEN", token == null ? "" : token);
-            env.put("GH_TOKEN", "");
+        if (token != null && !token.isBlank()) {
+            headers.put("Authorization", "Bearer " + token.strip());
         }
-        return env;
+        String url = t.getApiUrl() == null ? "" : t.getApiUrl().strip();
+        if (!url.isEmpty()) {
+            headers.put("X-Api-Url", url);
+        }
+        return headers;
     }
 
     /** True if the organisation has a token for the tracker (directly or via {@code env:VAR}). */
