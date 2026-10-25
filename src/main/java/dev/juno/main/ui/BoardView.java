@@ -79,9 +79,11 @@ public final class BoardView {
         newTicket.getStyleClass().add("accent");
         newTicket.setOnAction(e -> newTicket());
 
+        newTicket.getStyleClass().add("toolbar-action");
         MenuButton importIssue = new MenuButton("Import issue");
+        importIssue.getStyleClass().add("toolbar-action");
         for (TrackerKind kind : TrackerKind.values()) {
-            MenuItem item = new MenuItem("From " + kind.displayName() + "…");
+            MenuItem item = new MenuItem("From " + kind.displayName());
             item.setOnAction(e -> importAsNewTicket(kind));
             importIssue.getItems().add(item);
         }
@@ -280,6 +282,11 @@ public final class BoardView {
         return root.getScene() == null ? null : root.getScene().getWindow();
     }
 
+    /** A ticket as named in messages: its title in quotes. */
+    private static String name(Ticket t) {
+        return t.getTitle() == null || t.getTitle().isBlank() ? "the ticket" : "'" + t.getTitle().strip() + "'";
+    }
+
     private void status(String message) {
         statusLabel.setText(message);
     }
@@ -287,7 +294,7 @@ public final class BoardView {
     private void newTicket() {
         Ticket ticket = service.createTicket("", "", defaultProjectId());
         new TicketDetailsDialog(window(), service, ticket, true, hostServices).showAndWait();
-        status(service.ticket(ticket.getId()).map(t -> "Saved " + t.getId()).orElse("Discarded new ticket"));
+        status(service.ticket(ticket.getId()).map(t -> "Saved " + name(t)).orElse("Discarded new ticket"));
     }
 
     private void importAsNewTicket(TrackerKind kind) {
@@ -295,7 +302,7 @@ public final class BoardView {
                 .showAndWait().ifPresent(sel -> {
             status("Importing " + kind.displayName() + " " + sel.location() + "#" + sel.number() + "…");
             Fx.async(() -> service.importAsNewTicket(sel.projectId(), kind, sel.location(), sel.number()),
-                    t -> status("Imported " + kind.displayName() + " issue as " + t.getId()),
+                    t -> status("Imported " + kind.displayName() + " issue as " + name(t)),
                     err -> {
                         status("Import failed");
                         Fx.error(window(), "Import failed", err);
@@ -315,13 +322,13 @@ public final class BoardView {
         return new TicketCard.Actions() {
             @Override
             public void start(Ticket t, Window owner) {
-                status("Starting agent for " + t.getId() + "…");
+                status("Starting agent for " + name(t) + "…");
                 Fx.async(() -> {
                     service.startWork(t.getId());
                     return null;
-                }, ok -> status("Agent started on " + t.getId()), err -> {
-                    status("Could not start " + t.getId());
-                    Fx.error(owner, "Could not start " + t.getId(), err);
+                }, ok -> status("Agent started on " + name(t)), err -> {
+                    status("Could not start " + name(t));
+                    Fx.error(owner, "Could not start " + name(t), err);
                 });
             }
 
@@ -329,10 +336,10 @@ public final class BoardView {
             public void stop(Ticket t, Window owner) {
                 boolean review = t.getRunKind() == dev.juno.main.model.RunKind.REVIEW;
                 if (Fx.confirm(owner, "Stop agent?", "Stop the " + (review ? "AI review agent" : "agent")
-                        + " working on " + t.getId() + "? The ticket goes back to " + (review ? "AI review" : "Pending")
+                        + " working on " + name(t) + "? The ticket goes back to " + (review ? "AI review" : "Pending")
                         + "; commits and changes already made stay on its branch.")) {
                     service.stopWork(t.getId());
-                    status("Stopping agent on " + t.getId());
+                    status("Stopping agent on " + name(t));
                 }
             }
 
@@ -358,15 +365,15 @@ public final class BoardView {
                         Fx.async(() -> {
                             service.approveDesign(t.getId());
                             return null;
-                        }, ok -> status("Design approved; implementation started on " + t.getId()),
-                                err -> Fx.error(owner, "Could not start " + t.getId(), err));
+                        }, ok -> status("Design approved; implementation started on " + name(t)),
+                                err -> Fx.error(owner, "Could not start " + name(t), err));
                         return;
                     }
                     Fx.async(() -> {
                         service.respond(t.getId(), decision.answer());
                         return null;
-                    }, ok -> status("Resumed agent on " + t.getId()),
-                            err -> Fx.error(owner, "Could not resume " + t.getId(), err));
+                    }, ok -> status("Resumed agent on " + name(t)),
+                            err -> Fx.error(owner, "Could not resume " + name(t), err));
                 });
             }
 
@@ -374,21 +381,21 @@ public final class BoardView {
             public void move(Ticket t, TicketStatus target, Window owner) {
                 try {
                     service.move(t.getId(), target);
-                    status("Moved " + t.getId() + " to " + target.label());
+                    status("Moved " + name(t) + " to " + target.label());
                 } catch (Exception e) {
-                    Fx.error(owner, "Cannot move " + t.getId(), e);
+                    Fx.error(owner, "Cannot move " + name(t), e);
                 }
             }
 
             @Override
             public void retryPullRequest(Ticket t, Window owner) {
-                status("Retrying " + t.getId() + "…");
+                status("Retrying " + name(t) + "…");
                 Fx.async(() -> {
                     service.deliver(t.getId());
                     return null;
                 }, ok -> status(t.getPullRequestError() == null
-                        ? t.getId() + " delivered" + (t.getPullRequest() == null ? "" : ": " + t.getPullRequest().display())
-                        : t.getId() + " still failing; see the card"),
+                        ? name(t) + " delivered" + (t.getPullRequest() == null ? "" : ": " + t.getPullRequest().display())
+                        : name(t) + " still failing; see the card"),
                         err -> Fx.error(owner, "Retry failed", err));
             }
 
@@ -400,12 +407,12 @@ public final class BoardView {
 
             @Override
             public void startReview(Ticket t, Window owner) {
-                status("Reading review comments for " + t.getId() + "…");
+                status("Reading review comments for " + name(t) + "…");
                 Fx.async(() -> service.startReview(t.getId()),
                         count -> status(count == 0
-                                ? "No new comments on " + t.getId() + "'s pull request; AI review "
+                                ? "No new comments on " + name(t) + "'s pull request; AI review "
                                         + t.getReviewCount() + " completed immediately"
-                                : "AI review started on " + t.getId() + " with " + count + " comment(s)"),
+                                : "AI review started on " + name(t) + " with " + count + " comment(s)"),
                         err -> {
                             status("AI review not started");
                             Fx.error(owner, "Could not start the AI review", err);
@@ -414,19 +421,19 @@ public final class BoardView {
 
             @Override
             public void resume(Ticket t, Window owner) {
-                status("Resuming " + t.getId() + "…");
+                status("Resuming " + name(t) + "…");
                 Fx.async(() -> {
                     service.resumeInterrupted(t.getId());
                     return null;
-                }, ok -> status("Resumed " + t.getId()), err -> {
-                    status("Could not resume " + t.getId());
-                    Fx.error(owner, "Could not resume " + t.getId(), err);
+                }, ok -> status("Resumed " + name(t)), err -> {
+                    status("Could not resume " + name(t));
+                    Fx.error(owner, "Could not resume " + name(t), err);
                 });
             }
 
             @Override
             public void moveToDone(Ticket t, Window owner) {
-                if (Fx.confirm(owner, "Move " + t.getId() + " to Done?", "Are you sure? " + t.getId()
+                if (Fx.confirm(owner, "Move " + name(t) + " to Done?", "Are you sure? " + name(t)
                         + " will leave Review" + (t.getPullRequest() == null ? "."
                         : ". Its " + t.getPullRequest().tracker().pullRequestNoun() + " is not merged or closed by Juno."))) {
                     move(t, TicketStatus.DONE, owner);
@@ -436,18 +443,18 @@ public final class BoardView {
             @Override
             public void reopen(Ticket t, Window owner) {
                 TicketStatus target = t.getPullRequest() != null ? TicketStatus.REVIEW : TicketStatus.PENDING;
-                if (Fx.confirm(owner, "Remove " + t.getId() + " from Done?",
-                        t.getId() + " goes back to " + target.label() + ".")) {
+                if (Fx.confirm(owner, "Remove " + name(t) + " from Done?",
+                        name(t) + " goes back to " + target.label() + ".")) {
                     move(t, target, owner);
                 }
             }
 
             @Override
             public void delete(Ticket t, Window owner) {
-                if (Fx.confirm(owner, "Delete " + t.getId() + "?",
+                if (Fx.confirm(owner, "Delete " + name(t) + "?",
                         "This removes the ticket from Juno only; linked GitLab/GitHub issues are not touched.")) {
                     service.deleteTicket(t.getId());
-                    status("Deleted " + t.getId());
+                    status("Deleted " + name(t));
                 }
             }
         };

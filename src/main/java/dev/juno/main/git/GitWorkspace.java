@@ -44,20 +44,15 @@ public final class GitWorkspace {
         this.log = log;
     }
 
-    /** A branch name suggestion such as {@code juno/juno-12-add-login-page}. */
-    public static String suggestBranchName(String ticketId, String title) {
+    /** A branch name made from the ticket's title, such as {@code juno/add-login-page}. */
+    public static String suggestBranchName(String title) {
         String slug = title == null ? "" : title.toLowerCase(Locale.ROOT)
                 .replaceAll("[^a-z0-9]+", "-")
                 .replaceAll("(^-+|-+$)", "");
-        String base = "juno/" + ticketId.toLowerCase(Locale.ROOT);
-        if (slug.isEmpty()) {
-            return base;
+        if (slug.length() > 55) {
+            slug = slug.substring(0, 55).replaceAll("-+$", "");
         }
-        String name = base + "-" + slug;
-        if (name.length() > 60) {
-            name = name.substring(0, 60).replaceAll("-+$", "");
-        }
-        return name;
+        return "juno/" + (slug.isEmpty() ? "ticket" : slug);
     }
 
     /**

@@ -166,7 +166,9 @@ final class IssuePickerDialog extends Dialog<IssuePickerDialog.Selection> {
     }
 
     private void fillProjects(Organisation org, Project preferred) {
-        project.getItems().setAll(org == null ? java.util.List.of() : settings.projectsIn(org.getId()));
+        // Only projects hosted on this tracker: a project lives on GitHub or GitLab, never both.
+        project.getItems().setAll(org == null ? java.util.List.of() : settings.projectsIn(org.getId()).stream()
+                .filter(p -> p.host() == kind).toList());
         Project select = preferred != null && project.getItems().contains(preferred) ? preferred
                 : project.getItems().size() == 1 ? project.getItems().getFirst() : null;
         project.setValue(select);
@@ -180,7 +182,8 @@ final class IssuePickerDialog extends Dialog<IssuePickerDialog.Selection> {
         if (org != null && !org.tracker(kind).isEnabled()) {
             status.setText(kind.displayName() + " is not enabled for " + org.getName() + " (Settings).");
         } else if (org != null && project.getItems().isEmpty()) {
-            status.setText(org.getName() + " has no projects yet. Add one in Settings.");
+            status.setText(org.getName() + " has no projects hosted on " + kind.displayName()
+                    + ". Set a project's repository in Settings.");
         } else {
             status.setText("");
         }

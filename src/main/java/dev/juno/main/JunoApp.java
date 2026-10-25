@@ -59,6 +59,11 @@ public final class JunoApp extends Application {
             }
         });
         stage.show();
+        java.util.List<String> notes = service.store().settingsNotes();
+        if (!notes.isEmpty()) {
+            Fx.info(stage, "Settings updated", String.join("\n", notes)
+                    + "\n\nA backup of the previous settings is in settings.pre-single-host.json.");
+        }
     }
 
     @Override

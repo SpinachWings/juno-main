@@ -169,10 +169,6 @@
     -fx-font-size: 12px;
 }
 
-.column-done .column-title {
-    -fx-text-fill: derive(#6FD6FF, -35%);
-}
-
 .column-scroll,
 .column-scroll > .viewport {
     -fx-background-color: transparent;
@@ -209,6 +205,11 @@
 .card-title {
     -fx-text-fill: -text-bright;
     -fx-font-size: 14px;
+}
+
+/* An agent is actively on the ticket (Processing, Awaiting decision, In AI review). */
+.card-title.card-title-active {
+    -fx-text-fill: -magenta;
 }
 
 .card-link {
@@ -283,6 +284,20 @@
 .button:default:hover {
     -fx-background-color: rgba(255, 79, 216, 0.22);
     -fx-text-fill: -text-bright;
+}
+
+/* "+ New ticket" and "Import issue" share one size. */
+.toolbar-action {
+    -fx-pref-width: 140px;
+    -fx-min-width: 140px;
+    -fx-pref-height: 30px;
+    -fx-min-height: 30px;
+    -fx-alignment: center;
+}
+
+.menu-button.toolbar-action > .label {
+    -fx-alignment: center;
+    -fx-text-alignment: center;
 }
 
 .button.small {

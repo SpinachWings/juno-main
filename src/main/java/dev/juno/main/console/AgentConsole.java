@@ -44,6 +44,8 @@ public final class AgentConsole {
     /** The question currently awaiting an answer, or null. */
     private volatile String awaiting;
     private final StringBuilder answer = new StringBuilder();
+    /** The ticket's title, shown instead of its internal id. */
+    private volatile String title;
     /** Hash of the design doc last printed, so a new draft is shown once. */
     private volatile int printedDoc;
 
@@ -80,7 +82,7 @@ public final class AgentConsole {
 
     private void run() {
         out.println(RULE);
-        out.println(" Juno agent console - " + ticket + (consoleKey.endsWith("-review") ? " (AI review)" : ""));
+        out.println(" Juno agent console" + (consoleKey.endsWith("-review") ? " (AI review)" : ""));
         out.println(" Live agent activity. When the agent asks for a decision you can answer here or on the board.");
         out.println(RULE);
 
@@ -137,6 +139,11 @@ public final class AgentConsole {
 
     /** Prints status changes and opens / closes the decision prompt. Returns the new status. */
     private String onStateChange(JsonNode state, String lastStatus) {
+        String newTitle = state.path("title").asText("");
+        if (!newTitle.isBlank() && !newTitle.equals(title)) {
+            out.println((title == null ? " Ticket: " : "[juno] Ticket renamed: ") + newTitle);
+            title = newTitle;
+        }
         String status = state.path("status").asText("");
         String label = state.path("statusLabel").asText(status);
         String question = state.hasNonNull("question") ? state.get("question").asText() : null;
@@ -147,7 +154,7 @@ public final class AgentConsole {
             printedDoc = doc.hashCode();
             out.println();
             out.println(RULE);
-            out.println(" DESIGN DOC DRAFT - " + ticket);
+            out.println(" DESIGN DOC DRAFT - " + name());
             out.println(RULE);
             doc.lines().forEach(l -> out.println(" " + l));
             out.println(RULE);
@@ -163,7 +170,7 @@ public final class AgentConsole {
                 answer.setLength(0);
                 out.println();
                 out.println(RULE);
-                out.println(" DECISION NEEDED - " + ticket);
+                out.println(" DECISION NEEDED - " + name());
                 out.println(RULE);
                 question.lines().forEach(l -> out.println(" " + l));
                 out.println(RULE);
@@ -188,6 +195,10 @@ public final class AgentConsole {
             out.println("[juno] Pull request: " + state.get("pr").asText());
         }
         return status;
+    }
+
+    private String name() {
+        return title == null || title.isBlank() ? "this ticket" : title;
     }
 
     private void readInput() {

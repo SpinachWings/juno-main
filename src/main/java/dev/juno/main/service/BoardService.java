@@ -178,9 +178,12 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
     public Ticket createTicket(String title, String description, String projectId) {
         Ticket ticket;
         synchronized (this) {
-            int n = board.getNextTicketNumber();
-            board.setNextTicketNumber(n + 1);
-            ticket = new Ticket("JUNO-" + n, title, description);
+            // The id is internal only (keys, file names); tickets are always shown by their title.
+            String id;
+            do {
+                id = java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 12);
+            } while (ticket(id).isPresent());
+            ticket = new Ticket(id, title, description);
             ticket.setProjectId(projectId);
             board.getTickets().add(ticket);
             persist();
@@ -254,10 +257,10 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
             throw new JunoException("Use Run AI review to put a ticket into In AI review");
         }
         if (preparing.contains(ticketId) || delivering.contains(ticketId)) {
-            throw new JunoException(ticketId + " is busy; wait for it to finish first");
+            throw new JunoException(nameOf(ticketId) + " is busy; wait for it to finish first");
         }
         if (runner.isRunning(ticketId)) {
-            throw new JunoException("Stop the running agent before moving " + ticketId);
+            throw new JunoException("Stop the running agent before moving " + nameOf(ticketId));
         }
         synchronized (this) {
             Ticket t = require(ticketId);
@@ -313,7 +316,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         synchronized (this) {
             Ticket t = require(ticketId);
             if (t.getDesignDoc().isBlank()) {
-                throw new JunoException(ticketId + " has no design doc to approve");
+                throw new JunoException(name(t) + " has no design doc to approve");
             }
             t.setDesignDocApproved(true);
             t.setPendingQuestion(null);
@@ -358,7 +361,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         synchronized (this) {
             Ticket t = require(ticketId);
             if (t.getStatus() != TicketStatus.AWAITING_DECISION) {
-                throw new JunoException(ticketId + " is not waiting for a decision");
+                throw new JunoException(name(t) + " is not waiting for a decision");
             }
             kind = t.getRunKind();
         }
@@ -388,15 +391,15 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         Instant prOpened;
         synchronized (this) {
             if (preparing.contains(ticketId) || runner.isRunning(ticketId) || delivering.contains(ticketId)) {
-                throw new JunoException(ticketId + " already has an agent running");
+                throw new JunoException(nameOf(ticketId) + " already has an agent running");
             }
             t = require(ticketId);
             if (t.getStatus() != TicketStatus.REVIEW) {
-                throw new JunoException(t.getId() + " is not in the Review column");
+                throw new JunoException(name(t) + " is not in the Review column");
             }
             pr = t.getPullRequest();
             if (pr == null) {
-                throw new JunoException(t.getId() + " has no pull request to review yet");
+                throw new JunoException(name(t) + " has no pull request to review yet");
             }
             Project project = requireProject(t);
             org = settings.organisationOf(project)
@@ -471,7 +474,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         synchronized (this) {
             Ticket t = require(ticketId);
             if (!t.isInterrupted()) {
-                throw new JunoException(ticketId + " is not interrupted");
+                throw new JunoException(name(t) + " is not interrupted");
             }
             run = t.getActiveRun();
             deliveryOnly = run == null && t.isDeliveryPending();
@@ -498,9 +501,113 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         beginRun(ticketId, kind, null, null, new Recovery(session, source));
     }
 
+    /**
+     * Checks everything a run needs before anything is touched, reporting every missing piece at once: a title,
+     * a project (required) with a git folder and exactly one repository host, the organisation's integration and
+     * token for that host, a base branch and an agent. With {@code checkRemote}, it then asks the host that the
+     * repository exists (and the token can see it) and that the base branch exists there.
+     */
+    void preflight(String ticketId, boolean checkRemote) throws JunoException {
+        Project project;
+        Organisation org;
+        String base;
+        List<String> problems = new ArrayList<>();
+        synchronized (this) {
+            Ticket t = require(ticketId);
+            project = settings.project(t.getProjectId()).orElse(null);
+            if (project == null) {
+                throw new JunoException(name(t) + " has no project. Tickets must have a project to run: open the "
+                        + "ticket's Details and choose one.");
+            }
+            org = settings.organisationOf(project).orElse(null);
+            base = t.getBaseBranch() == null ? "" : t.getBaseBranch().strip();
+            String where = "Settings → Organisations & projects";
+            if (t.getTitle() == null || t.getTitle().isBlank()) {
+                problems.add("The ticket has no title. Give it one in Details.");
+            }
+            String path = project.getPath() == null ? "" : project.getPath().strip();
+            if (path.isEmpty()) {
+                problems.add("Project '" + project.getName() + "' has no local folder. Set it in " + where + ".");
+            } else if (!Files.isDirectory(Path.of(path))) {
+                problems.add("Project '" + project.getName() + "' points to " + path + ", which doesn't exist. "
+                        + "Fix the folder in " + where + ".");
+            } else if (!Files.exists(Path.of(path).resolve(".git"))) {
+                problems.add("Project '" + project.getName() + "' folder " + path + " is not a git repository.");
+            }
+            TrackerKind host = project.host();
+            if (org == null) {
+                problems.add("Project '" + project.getName() + "' isn't in an organisation. Move it into one in "
+                        + where + ".");
+            }
+            if (project.hasBothHosts()) {
+                problems.add("Project '" + project.getName() + "' has both a GitHub repo and a GitLab project. A "
+                        + "project lives on one host only: remove one in " + where + ".");
+            } else if (host == null) {
+                problems.add("Project '" + project.getName() + "' has no repository. Set its GitHub repo or "
+                        + "GitLab project in " + where + ".");
+            } else if (org != null) {
+                if (!org.tracker(host).isEnabled()) {
+                    problems.add(host.displayName() + " isn't enabled for organisation '" + org.getName()
+                            + "'. Enable it and add a token in " + where + ".");
+                } else if (!IssueTrackerService.hasToken(org, host)) {
+                    String token = org.tracker(host).getToken() == null ? "" : org.tracker(host).getToken().strip();
+                    problems.add("Organisation '" + org.getName() + "' has no " + host.displayName() + " token"
+                            + (token.startsWith("env:") ? " (the environment variable " + token.substring(4)
+                            + " it refers to isn't set)" : "") + ". Add one in " + where + ".");
+                }
+            }
+            if (base.isEmpty()) {
+                problems.add("The ticket has no base branch. Set one in Details (for example main).");
+            }
+            String branch = t.getBranchName() == null ? "" : t.getBranchName().strip();
+            if (!branch.isEmpty()) {
+                if (branch.equals(base)) {
+                    problems.add("The ticket's branch and base branch are both '" + base + "'. Use a separate "
+                            + "branch for the work.");
+                }
+                branchOwner(t, branch).ifPresent(o -> problems.add("Branch '" + branch + "' is already used by "
+                        + name(o) + ". Choose another branch name in Details."));
+            }
+            if (settings.resolveAgent(t).isEmpty()) {
+                problems.add("No agent is assigned to the ticket, project '" + project.getName() + "'"
+                        + (org == null ? "" : " or organisation '" + org.getName() + "'")
+                        + ". Assign one in the ticket's Details or in Settings.");
+            }
+        }
+        if (!problems.isEmpty()) {
+            throw new JunoException(problems.size() == 1 ? problems.getFirst()
+                    : "This ticket can't run yet:\n- " + String.join("\n- ", problems));
+        }
+        if (!checkRemote) {
+            return;
+        }
+        TrackerKind host = project.host();
+        String location = project.location(host);
+        String noun = host == TrackerKind.GITLAB ? "project" : "repository";
+        IssueTrackerService.RepositoryCheck check;
+        try {
+            check = trackers.checkRepository(org, host, location, base);
+        } catch (McpException e) {
+            throw new JunoException("Couldn't check the " + host.displayName() + " " + noun + " '" + location
+                    + "': " + e.getMessage(), e);
+        }
+        if (!check.exists()) {
+            throw new JunoException("The " + host.displayName() + " " + noun + " '" + location + "' doesn't exist, "
+                    + "or organisation '" + org.getName() + "''s token can't access it. Check project '"
+                    + project.getName() + "' and the token in Settings → Organisations & projects.");
+        }
+        if (Boolean.FALSE.equals(check.branchExists())) {
+            throw new JunoException("The base branch '" + base + "' doesn't exist in " + host.displayName() + " "
+                    + noun + " '" + location + "'"
+                    + (check.defaultBranch().isBlank() ? "" : " (its default branch is '" + check.defaultBranch() + "')")
+                    + ". Change the base branch in the ticket's Details, or push it first.");
+        }
+    }
+
     private void beginRun(String ticketId, RunKind kind, String answer, ReviewInput review, Recovery recovery)
             throws JunoException {
         boolean resume = answer != null;
+        preflight(ticketId, !resume);
         List<SkillEntry> packs;
         Path repo;
         Path worktree;
@@ -508,16 +615,16 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         String branch;
         synchronized (this) {
             if (preparing.contains(ticketId) || runner.isRunning(ticketId) || delivering.contains(ticketId)) {
-                throw new JunoException(ticketId + " is already starting or running");
+                throw new JunoException(nameOf(ticketId) + " is already starting or running");
             }
             Ticket t = require(ticketId);
             Project project = requireProject(t);
             settings.resolveAgent(t).orElseThrow(() -> new JunoException(
-                    "No agent is assigned to " + t.getId() + ", project '" + project.getName()
+                    "No agent is assigned to " + name(t) + ", project '" + project.getName()
                             + "' or its organisation. Assign one in the ticket's Details or in Settings."));
             checkCapacity();
             if (t.getBranchName().isBlank()) {
-                t.setBranchName(GitWorkspace.suggestBranchName(t.getId(), t.getTitle()));
+                t.setBranchName(uniqueBranchName(t));
                 persist();
             }
             repo = Path.of(project.getPath());
@@ -602,7 +709,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
                         String basePrompt = original != null ? original
                                 : kind == RunKind.REVIEW
                                 ? "You are addressing review feedback on " + (t.getPullRequest() == null ? "the pull request"
-                                        : t.getPullRequest().url()) + " for ticket " + t.getId() + ": " + t.getTitle()
+                                        : t.getPullRequest().url()) + " for the ticket \"" + t.getTitle() + "\""
                                         + ". Read the pull request's comments with the MCP tools if available."
                                 : PromptBuilder.initial(t, p, tools);
                         return PromptBuilder.recoveryFresh(basePrompt, t, recapText, gitText);
@@ -770,7 +877,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         Organisation org = settings.organisationOf(project)
                 .orElseThrow(() -> new JunoException("Project '" + project.getName() + "' has no organisation"));
         AgentAssignment agent = settings.resolveAgent(t).orElseThrow(() -> new JunoException(
-                "No agent is assigned to " + t.getId() + ", project '" + project.getName()
+                "No agent is assigned to " + name(t) + ", project '" + project.getName()
                         + "' or organisation '" + org.getName() + "'. Assign one in the ticket's Details "
                         + "or in Settings."));
         checkCapacity();
@@ -1067,7 +1174,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
             branch = t.getBranchName();
             base = t.getBaseBranch();
             baseRef = t.getBaseRef() != null ? t.getBaseRef() : base;
-            title = t.getId() + ": " + t.getTitle();
+            title = t.getTitle();
             body = pullRequestBody(t);
         }
         if (project == null || org == null) {
@@ -1128,7 +1235,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         GitWorkspace git = git(ticketId);
         log(ticketId, "");
         log(ticketId, "=== AI review: pushing fixes to " + pr.display() + " ===");
-        if (git.commitLeftovers(worktree, t.getId() + ": address review feedback\n\n"
+        if (git.commitLeftovers(worktree, "Address review feedback: " + t.getTitle() + "\n\n"
                 + "Changes left uncommitted by the review agent, committed by Juno.")) {
             log(ticketId, "[juno] committed changes the agent left uncommitted");
         }
@@ -1138,10 +1245,18 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         } else {
             log(ticketId, "[juno] the review agent made no code changes");
         }
-        // The summary stays in Juno (card + log): commenting on the PR is not one of the permitted actions.
-        log(ticketId, "[juno] AI review summary: " + summary.replace('\n', ' '));
         log(ticketId, ahead > 0 ? "[juno] pushed " + ahead + " commit(s) to " + pr.display()
                 : "[juno] nothing to push");
+        int number;
+        synchronized (this) {
+            number = t.getReviewCount() + 1;
+        }
+        String comment = "### AI review " + number + "\n\n" + summary + "\n\n"
+                + (ahead > 0 ? "_" + ahead + " commit(s) pushed to this " + pr.tracker().pullRequestNoun() + "._"
+                : "_No code changes were needed._")
+                + "\n\n" + ReviewComment.JUNO_MARKER;
+        trackers.commentOnPullRequest(org, pr.tracker(), pr.location(), pr.number(), comment);
+        log(ticketId, "[juno] posted the AI review summary on " + pr.display());
         synchronized (this) {
             Instant started = reviewStarts.remove(ticketId);
             t.setLastReviewAt((started == null ? Instant.now() : started).toString());
@@ -1156,35 +1271,26 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
     }
 
     /**
-     * Where to open the pull request: a tracker the ticket is linked to first, then GitHub, then GitLab; the
-     * first that is enabled for the organisation and configured on the project wins.
+     * Where to open the pull request: the project's repository host (a project is on GitHub or GitLab, never
+     * both), which must be enabled for its organisation.
      */
     static TrackerKind pullRequestTracker(Ticket t, Project project, Organisation org) throws JunoException {
-        List<TrackerKind> order = new ArrayList<>();
-        for (TrackerKind kind : TrackerKind.values()) {
-            if (t.getRef(kind) != null) {
-                order.add(kind);
-            }
+        TrackerKind host = project.host();
+        if (host == null || project.hasBothHosts()) {
+            throw new JunoException("Project '" + project.getName() + "' needs exactly one repository: a GitHub "
+                    + "repo or a GitLab project. Set it in Settings, then use Retry PR.");
         }
-        for (TrackerKind kind : List.of(TrackerKind.GITHUB, TrackerKind.GITLAB)) {
-            if (!order.contains(kind)) {
-                order.add(kind);
-            }
+        if (!org.tracker(host).isEnabled()) {
+            throw new JunoException(host.displayName() + " isn't enabled for organisation '" + org.getName()
+                    + "'. Enable it in Settings, then use Retry PR.");
         }
-        for (TrackerKind kind : order) {
-            if (org.tracker(kind).isEnabled() && !project.location(kind).isEmpty()) {
-                return kind;
-            }
-        }
-        throw new JunoException("Project '" + project.getName() + "' has no GitHub repo or GitLab project with "
-                + "that integration enabled for organisation '" + org.getName() + "'. Set one in Settings, then "
-                + "use Retry PR.");
+        return host;
     }
 
     private static String pullRequestBody(Ticket t) {
         String summary = t.getLastSummary() == null || t.getLastSummary().isBlank()
                 ? "_The agent did not provide a summary._" : t.getLastSummary().strip();
-        return summary + "\n\n---\nTicket " + t.getId() + ": " + t.getTitle() + "\n\n_Opened by Juno._";
+        return summary + "\n\n---\nTicket: " + t.getTitle() + "\n\n_Opened by Juno._";
     }
 
     /** Adds "Closes #n" when the ticket's linked issue lives in the same repository as the pull request. */
@@ -1356,8 +1462,13 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
             body = t.getDescription();
             existing = t.getRef(kind);
             org = organisationOf(t).orElseThrow(() -> new JunoException(
-                    t.getId() + " is not linked to a project. Choose a project first: its organisation's "
+                    name(t) + " has no project. Choose a project first: its organisation's "
                             + kind.displayName() + " credentials are used for the upload."));
+            Project p = projectOf(t).orElse(null);
+            if (p != null && p.host() != null && p.host() != kind) {
+                throw new JunoException("Project '" + p.getName() + "' is on " + p.host().displayName()
+                        + ", so its tickets sync with " + p.host().displayName() + " only.");
+            }
         }
         if (title == null || title.isBlank()) {
             throw new JunoException("The ticket needs a title before it can be uploaded");
@@ -1416,7 +1527,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
 
     private Ticket require(String ticketId) throws JunoException {
         return board.getTickets().stream().filter(t -> t.getId().equals(ticketId)).findFirst()
-                .orElseThrow(() -> new JunoException("Ticket " + ticketId + " no longer exists"));
+                .orElseThrow(() -> new JunoException("The ticket no longer exists"));
     }
 
     private synchronized Organisation requireOrganisation(String orgId) throws JunoException {
@@ -1425,14 +1536,41 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
 
     private Project requireProject(Ticket t) throws JunoException {
         Project project = settings.project(t.getProjectId())
-                .orElseThrow(() -> new JunoException(t.getId() + " is not linked to a project. "
-                        + "Open its details and choose a project first."));
+                .orElseThrow(() -> new JunoException(name(t) + " has no project. Tickets must have a project "
+                        + "to run: open its Details and choose one."));
         if (project.getPath() == null || project.getPath().isBlank()
                 || !Files.isDirectory(Path.of(project.getPath()))) {
             throw new JunoException("Project '" + project.getName() + "' has no valid directory. "
                     + "Set it in Settings → Organisations & projects.");
         }
         return project;
+    }
+
+    /** A ticket as named in messages: its title in quotes. */
+    static String name(Ticket t) {
+        return t.getTitle() == null || t.getTitle().isBlank() ? "This ticket" : "'" + t.getTitle().strip() + "'";
+    }
+
+    private synchronized String nameOf(String ticketId) {
+        return ticket(ticketId).map(BoardService::name).orElse("The ticket");
+    }
+
+    /** A branch name from the ticket's title that no other open ticket uses. Caller holds the lock. */
+    private String uniqueBranchName(Ticket t) {
+        String base = GitWorkspace.suggestBranchName(t.getTitle());
+        String name = base;
+        for (int n = 2; branchOwner(t, name).isPresent(); n++) {
+            name = base + "-" + n;
+        }
+        return name;
+    }
+
+    /** Another ticket (not in Done) already using the branch. Caller holds the lock. */
+    private Optional<Ticket> branchOwner(Ticket self, String branch) {
+        return board.getTickets().stream()
+                .filter(o -> o != self && o.getStatus() != TicketStatus.DONE)
+                .filter(o -> o.getBranchName() != null && o.getBranchName().equalsIgnoreCase(branch))
+                .findFirst();
     }
 
     private void persist() {

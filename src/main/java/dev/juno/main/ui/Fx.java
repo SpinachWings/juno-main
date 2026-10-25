@@ -59,7 +59,7 @@ public final class Fx {
         TextArea text = new TextArea(message);
         text.setEditable(false);
         text.setWrapText(true);
-        text.setPrefRowCount(Math.min(12, Math.max(3, message.length() / 70 + 1)));
+        text.setPrefRowCount(Math.min(14, Math.max(3, Math.max((int) message.lines().count() + 1, message.length() / 70 + 1))));
         alert.getDialogPane().setContent(text);
         alert.showAndWait();
     }

@@ -20,19 +20,18 @@ starts as child processes.
 - JDK 27
 - Maven 3.9+
 - [Claude Code](https://docs.claude.com/en/docs/claude-code) installed and logged in (`claude` on your PATH)
-- The two MCP servers built (`mvn package` in each), for GitLab/GitHub sync
+- The `juno-gitlab-mcp` and `juno-github-mcp` repos next to this one. They need no setup: if a server's jar
+  hasn't been built yet, Juno builds it (`mvn package`) the first time it's needed.
 
 ## Run
 
 ```bash
-# build the MCP servers once (from the juno folder)
-cd ../juno-gitlab-mcp && mvn package
-cd ../juno-github-mcp && mvn package
-
-# run Juno
-cd ../juno-main
 mvn javafx:run
 ```
+
+All GitLab/GitHub configuration (URLs and tokens) happens in Juno, per organisation, under
+**Settings → Organisations & projects**. Juno passes each organisation's token to its own MCP server process
+and never lets a `GITHUB_TOKEN` / `GITLAB_TOKEN` from its own environment through to the servers.
 
 `mvn javafx:jlink` builds a self-contained runtime image with a `juno` launcher in `target/juno`.
 
@@ -40,7 +39,7 @@ mvn javafx:run
 
 ```
 Organisation   GitLab / GitHub integration (URL + token), default agent
- └─ Project    local directory, colour, GitLab project / GitHub repo, optional agent, extra allowed tools
+ └─ Project    local directory, colour, repository (on GitHub or GitLab), optional agent, extra allowed tools
      └─ Ticket optional agent
 ```
 
@@ -52,48 +51,56 @@ Organisation   GitLab / GitHub integration (URL + token), default agent
 - **Repo matching is per organisation.** Importing `acme/api` in one organisation never links to another
   organisation's project with the same repo name.
 - The board has an **Organisation** filter and a **Project** filter. With *All organisations*, the project
-  list shows every project from every organisation. Cards show `ID · Organisation · Project`, the title,
-  and the agent that will run. Each card is tinted with its project's colour.
+  list shows every project from every organisation. Cards show `Organisation · Project`, the title, the agent that
+  will run, and the base branch and working branch. Tickets have no numbers: they are always shown by title. Each card is tinted with its project's colour.
 
 Settings written by earlier versions are migrated automatically on first start:
 - The single GitLab/GitHub setup becomes a "Default" organisation.
 - The single agent becomes "Default agent", assigned to that organisation.
 - Existing projects move into the Default organisation.
 
-The original file is kept as `settings.pre-orgs.json`.
+The original file is kept as `settings.pre-orgs.json`. A project that had both a GitHub repo and a GitLab
+project keeps the one its organisation has enabled (GitHub if both are), Juno says so on start-up, and the
+previous file is kept as `settings.pre-single-host.json`.
 
 ## Using it
 
 1. **Settings → Organisations & projects**: add an organisation, enable GitLab and/or GitHub for it with a
    URL and token, and pick its default agent. Add projects under it: directory, colour (cards are tinted
-   with it), GitLab project / GitHub repo, and optionally their own agent and extra allowed tools (e.g. the
-   project's build/test commands).
+   with it), its repository (a project is hosted on GitHub **or** GitLab, never both: pick the host, then
+   `owner/repo` or `group/project`), and optionally their own agent and extra allowed tools (e.g. the
+   project's build/test commands). Save checks the repository format and that its host is enabled for the
+   organisation.
 2. **Settings → Agents**: create agent profiles. Each sets the Claude Code program, model, permission
    mode, allowed tools, max turns, and an optional API key or server URL. Leave the key blank to use your
    existing `claude` login.
-3. **Settings → General**: the MCP jar paths (filled in automatically when the repos sit side by side),
-   the Java runtime for them, and the overall limit on concurrent agents.
+3. **Settings → General**: the MCP jar paths (filled in automatically when the repos sit side by side, and
+   built automatically if missing), the Java runtime for them, and the overall limit on concurrent agents.
 4. Use **+ New ticket** or **Import issue**. Import asks for the organisation and project first, because
    their credentials are used. On a card, **Details** opens the ticket menu:
    - edit the title and full description
    - set the organisation, project and agent override
-   - upload ticket info to GitLab or GitHub (creates the issue, or updates the linked one)
-   - import ticket info from GitLab or GitHub
+   - upload ticket info to the project's host (creates the issue, or updates the linked one)
+   - import ticket info from the project's host
 
    Moving a ticket to a project in another organisation removes its issue links, after a warning, since
    they belong to the old organisation's credentials.
-5. **Start** runs the resolved agent with `claude -p --output-format stream-json …` in the project
+5. **Start** needs a project: tickets without one can be saved but not run. Before anything is touched, Juno
+   checks that the ticket has a title, base branch and agent; that its project has an existing git folder
+   and a repository; that the organisation has that host enabled with a token; and, on GitHub/GitLab, that
+   the repository exists (and the token can see it) and that the base branch exists there. Every problem
+   found is listed in one message, and the ticket stays in Pending. It then runs the resolved agent with `claude -p --output-format stream-json …` in the project
    directory, using the ticket as the prompt. **Log** shows live activity.
 
 ### Ticket fields
 
 | Field | Synced with GitLab/GitHub? | Used for |
 | --- | --- | --- |
-| Title | yes | Issue title; PR title (`JUNO-12: <title>`) |
+| Title | yes | Issue title; PR title; branch name |
 | Description | yes, both ways | Upload replaces the issue description; import replaces the ticket's description. Also part of the agent prompt. |
 | Initial instructions | no | Extra guidance given to the agent when it first picks up the ticket |
 | Base branch | no | Branch the work starts from and the pull request targets (default `main`) |
-| Branch name | no | Branch the agent works on (blank = `juno/<ticket>-<title>`) |
+| Branch name | no | Branch the agent works on (blank = `juno/<title>`, with `-2`, `-3`… if another open ticket already uses it) |
 
 Base branch and branch name are fixed once work has started.
 
@@ -112,8 +119,8 @@ Base branch and branch name are fixed once work has started.
    - It then opens a pull request (GitHub) or merge request (GitLab) into the base branch through the
      organisation's MCP server. The agent's summary becomes the description, plus `Closes #n` when the
      linked issue is in the same repository.
-   - The PR goes to the tracker the ticket is linked to if possible, otherwise GitHub, then GitLab, using
-     the project's configured repo.
+   - The PR goes to the project's repository, on its host (GitHub or GitLab). Its title is the ticket's
+     title.
 3. Once pushed and the PR is open, the ticket moves to **AI review** with the PR link on its card. If
    something failed (no commits, push rejected, repo not configured), it moves to **Awaiting decision**
    with the reason. **Retry** tries again and never opens a duplicate PR; replying there resumes the agent
@@ -127,7 +134,7 @@ Tips:
 
 ### Agent terminals
 
-When an agent starts, Juno opens a terminal window titled `Juno <ticket>` with a live agent console:
+When an agent starts, Juno opens a terminal window titled `Juno - <ticket title>` with a live agent console:
 - it streams everything the agent does (the same as **Log**, including history)
 - when the agent asks for a decision, it shows the question and lets you type the answer. Finish with an
   empty line.
@@ -154,11 +161,12 @@ up and the ticket stays in Review. Otherwise the ticket moves to **In AI review*
 2. Fetches the branch and fast-forwards it if someone else pushed to it.
 3. Runs the ticket's agent (ticket → project → organisation) with that feedback, marking what is new since
    the last AI review.
-4. Commits and pushes the fixes to the same PR. The agent's summary is shown on the card and in the log.
-   Juno doesn't post comments on the PR.
+4. Commits and pushes the fixes to the same PR, then posts the agent's summary as one comment on the PR
+   ("AI review N"). The comment is tagged so later reviews ignore it. The summary is also on the card and in
+   the log.
 
 Then the ticket returns to Review with its counter incremented. The review agent gets its own terminal
-(`Juno <ticket> AI review`), and its questions also come through Awaiting decision.
+(`Juno - <ticket title> (AI review)`), and its questions also come through Awaiting decision.
 
 ### Interruptions and Resume
 
@@ -221,7 +229,8 @@ Juno's rules always take precedence over any skill.
 
 Pull/merge requests are only ever merged by a human, in GitLab/GitHub. This is enforced in three places:
 - **MCP servers.** They only reach an allowlist of endpoints (copy/paste ticket info, open a PR/MR, read
-  review comments). Merge, approve, auto-merge and rebase endpoints are blocked outright.
+  review comments, post the AI review summary on a PR/MR, and a read-only repository/branch check). Merge,
+  approve, auto-merge and rebase endpoints are blocked outright.
 - **Agent command line.** Every agent is started with `--disallowedTools` covering `git push`,
   `git merge`/`rebase`, `gh pr merge`/`review`/`close`, `glab mr merge`/`approve`/`close` and the `gh`/`glab`
   API commands.

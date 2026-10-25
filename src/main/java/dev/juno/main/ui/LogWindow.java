@@ -50,7 +50,7 @@ final class LogWindow {
 
         Stage stage = new Stage();
         stage.initOwner(owner);
-        stage.setTitle("Agent log - " + ticket.getId() + ": " + ticket.getTitle());
+        stage.setTitle("Agent log - " + ticket.getTitle());
         Scene scene = new Scene(root, 900, 600);
         if (owner != null && owner.getScene() != null) {
             scene.getStylesheets().addAll(owner.getScene().getStylesheets());

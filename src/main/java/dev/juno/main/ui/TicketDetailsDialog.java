@@ -53,7 +53,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         }
     }
 
-    private static final Item NO_PROJECT = new Item(null, "— none —");
+    private static final Item NO_PROJECT = new Item(null, "— choose a project (required to run) —");
 
     private final BoardService service;
     private final Ticket ticket;
@@ -89,9 +89,9 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
 
         initOwner(owner);
         Fx.inheritStyles(this, owner);
-        setTitle(isNew ? "New ticket" : ticket.getId());
-        setHeaderText(isNew ? "New ticket " + ticket.getId()
-                : ticket.getId() + "  ·  " + ticket.getStatus().label());
+        setTitle(isNew ? "New ticket" : ticket.getTitle().isBlank() ? "Ticket" : ticket.getTitle());
+        setHeaderText(isNew ? "New ticket" : (ticket.getTitle().isBlank() ? "Ticket" : ticket.getTitle())
+                + "  ·  " + ticket.getStatus().label());
         setResizable(true);
 
         ButtonType save = new ButtonType("Save", ButtonBar.ButtonData.OK_DONE);
@@ -130,7 +130,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
 
     private BorderPane buildContent() {
         title.setPromptText("Short summary of the work");
-        description.setPromptText("Full description, acceptance criteria, notes for the agent…");
+        description.setPromptText("Full description, acceptance criteria, notes for the agent");
         description.setWrapText(true);
         description.setPrefRowCount(14);
 
@@ -147,6 +147,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
             if (!loading) {
                 fillAgents(selectedAgentId());
             }
+            refreshSyncButtons();
         });
         agent.setMaxWidth(Double.MAX_VALUE);
         agentHint.getStyleClass().add("hint");
@@ -167,9 +168,9 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
 
         baseBranch.setPromptText("main");
         baseBranch.setPrefColumnCount(14);
-        branchName.setPromptText(GitWorkspace.suggestBranchName(ticket.getId(), ticket.getTitle()));
+        branchName.setPromptText(GitWorkspace.suggestBranchName(ticket.getTitle()));
         title.textProperty().addListener((obs, old, value) ->
-                branchName.setPromptText(GitWorkspace.suggestBranchName(ticket.getId(), value)));
+                branchName.setPromptText(GitWorkspace.suggestBranchName(value)));
         HBox.setHgrow(branchName, Priority.ALWAYS);
         Label branchLabel = new Label("Branch name");
         HBox branchRow = new HBox(8, baseBranch, branchLabel, branchName);
@@ -184,7 +185,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         GridPane.setVgrow(description, Priority.ALWAYS);
 
         instructions.setPromptText("Instructions for the agent when it picks up this ticket (not synced to "
-                + "GitLab/GitHub), e.g. approach, files to look at, things to avoid…");
+                + "GitLab/GitHub), e.g. approach, files to look at, things to avoid");
         instructions.setWrapText(true);
         instructions.setPrefRowCount(5);
         Label instructionsLabel = new Label("Initial\ninstructions");
@@ -219,24 +220,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         links.getChildren().add(pullRequestRow);
         form.addRow(8, new Label("Linked issues"), links);
 
-        // The sync "menu".
-        Label menuTitle = new Label("Sync");
-        menuTitle.getStyleClass().add("section-title");
-        actionsBox.getChildren().add(menuTitle);
-        for (TrackerKind kind : TrackerKind.values()) {
-            actionsBox.getChildren().add(actionButton("Upload ticket info to " + kind.displayName(),
-                    () -> upload(kind)));
-        }
-        for (TrackerKind kind : TrackerKind.values()) {
-            actionsBox.getChildren().add(actionButton("Import ticket info from " + kind.displayName(),
-                    () -> importFrom(kind)));
-        }
-        Label hint = new Label("Uploads and imports use the ticket's organisation's credentials. On import, the "
-                + "ticket is linked automatically to the organisation's project configured for that GitLab "
-                + "project / GitHub repo.");
-        hint.setWrapText(true);
-        hint.getStyleClass().add("hint");
-        actionsBox.getChildren().add(hint);
+        // The sync "menu": filled by refreshSyncButtons() for the selected project's host.
         actionsBox.setPadding(new Insets(0, 0, 0, 16));
         actionsBox.setPrefWidth(260);
         actionsBox.setMinWidth(240);
@@ -254,6 +238,37 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         content.setRight(actionsBox);
         content.setBottom(statusRow);
         return content;
+    }
+
+    /**
+     * The sync menu offers the selected project's repository host only: a project lives on GitHub or GitLab,
+     * never both.
+     */
+    private void refreshSyncButtons() {
+        actionsBox.getChildren().clear();
+        Label menuTitle = new Label("Sync");
+        menuTitle.getStyleClass().add("section-title");
+        actionsBox.getChildren().add(menuTitle);
+        Project selectedProject = service.settings().project(selectedProjectId()).orElse(null);
+        TrackerKind host = selectedProject == null ? null : selectedProject.host();
+        String text;
+        if (selectedProject == null) {
+            text = "Choose a project to sync this ticket with its GitHub repo or GitLab project.";
+        } else if (host == null) {
+            text = "Project '" + selectedProject.getName() + "' has no GitHub repo or GitLab project yet. Set one "
+                    + "in Settings → Organisations & projects.";
+        } else {
+            actionsBox.getChildren().add(actionButton("Upload ticket info to " + host.displayName(),
+                    () -> upload(host)));
+            actionsBox.getChildren().add(actionButton("Import ticket info from " + host.displayName(),
+                    () -> importFrom(host)));
+            text = "Syncs with " + host.displayName() + " " + selectedProject.location(host) + " using the "
+                    + "organisation's credentials.";
+        }
+        Label hint = new Label(text);
+        hint.setWrapText(true);
+        hint.getStyleClass().add("hint");
+        actionsBox.getChildren().add(hint);
     }
 
     private Button actionButton(String text, Runnable action) {
@@ -293,6 +308,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
             loading = false;
         }
         refreshLinks();
+        refreshSyncButtons();
     }
 
     private void fillProjects(Organisation org, String selectId) {
@@ -428,7 +444,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
             return;
         }
         applyEdits();
-        setBusy(true, "Exporting design doc…");
+        setBusy(true, "Exporting design doc");
         Fx.async(() -> service.exportDesignDoc(ticket.getId()), path -> {
             setBusy(false, "Design doc saved to " + path);
             refreshDesignStatus();
@@ -511,7 +527,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
             ask.initOwner(getDialogPane().getScene().getWindow());
             Fx.inheritStyles(ask, getDialogPane().getScene().getWindow());
             ask.setTitle("Upload to " + kind.displayName());
-            ask.setHeaderText("Create a new " + kind.displayName() + " issue from " + ticket.getId());
+            ask.setHeaderText("Create a new " + kind.displayName() + " issue from '" + ticket.getTitle() + "'");
             ask.setContentText(kind.displayName() + " " + kind.locationHint() + ":");
             Optional<String> answer = ask.showAndWait().map(String::strip).filter(s -> !s.isEmpty());
             if (answer.isEmpty()) {
@@ -519,7 +535,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
             }
             location = answer.get();
         }
-        setBusy(true, "Uploading to " + kind.displayName() + "…");
+        setBusy(true, "Uploading to " + kind.displayName());
         Fx.async(() -> service.upload(ticket.getId(), kind, location), ref -> {
             setBusy(false, (existing != null ? "Updated " : "Created ") + kind.displayName() + " issue " + ref.display());
             refreshLinks();
@@ -549,7 +565,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
                     }
                     // Keep the agent choice made in the form; the import sets project, title and description.
                     ticket.setAgentProfileId(selectedAgentId());
-                    setBusy(true, "Importing from " + kind.displayName() + "…");
+                    setBusy(true, "Importing from " + kind.displayName());
                     Fx.async(() -> {
                         service.importIssue(ticket.getId(), sel.projectId(), kind, sel.location(), sel.number());
                         return null;

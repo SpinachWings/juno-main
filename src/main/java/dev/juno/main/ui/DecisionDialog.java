@@ -28,8 +28,8 @@ final class DecisionDialog extends Dialog<DecisionDialog.Decision> {
         initOwner(owner);
         Fx.inheritStyles(this, owner);
         boolean design = ticket.isDesignAwaitingApproval();
-        setTitle((design ? "Design review: " : "Decision needed: ") + ticket.getId());
-        setHeaderText(ticket.getId() + ": " + ticket.getTitle());
+        setTitle((design ? "Design review: " : "Decision needed: ") + ticket.getTitle());
+        setHeaderText(ticket.getTitle());
         setResizable(true);
 
         ButtonType approve = new ButtonType("Approve design & start work", ButtonBar.ButtonData.OK_DONE);

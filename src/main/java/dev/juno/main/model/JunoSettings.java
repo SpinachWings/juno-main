@@ -52,11 +52,24 @@ public final class JunoSettings {
     }
 
     /** Repairs references after loading (e.g. projects whose organisation was removed by hand). */
-    public void normalise() {
+    public List<String> normalise() {
+        List<String> notes = new ArrayList<>();
         if (organisations.isEmpty() && !projects.isEmpty()) {
             organisations.add(new Organisation("Default"));
         }
         for (Project p : projects) {
+            if (p.hasBothHosts()) {
+                // A project lives on GitHub or GitLab, not both: keep the one its organisation has enabled.
+                boolean gitlabOnly = organisation(p.getOrgId())
+                        .map(o -> o.tracker(TrackerKind.GITLAB).isEnabled() && !o.tracker(TrackerKind.GITHUB).isEnabled())
+                        .orElse(false);
+                TrackerKind keep = gitlabOnly ? TrackerKind.GITLAB : TrackerKind.GITHUB;
+                TrackerKind drop = keep == TrackerKind.GITHUB ? TrackerKind.GITLAB : TrackerKind.GITHUB;
+                notes.add("Project '" + p.getName() + "' had both a GitHub repo and a GitLab project; kept "
+                        + keep.displayName() + " " + p.location(keep) + " and removed " + drop.displayName() + " "
+                        + p.location(drop) + ".");
+                p.setRepository(keep, p.location(keep));
+            }
             if (organisation(p.getOrgId()).isEmpty()) {
                 p.setOrgId(organisations.getFirst().getId());
             }
@@ -69,6 +82,7 @@ public final class JunoSettings {
                 o.setAgentProfileId(null);
             }
         }
+        return notes;
     }
 
     // ---- accessors --------------------------------------------------------------------------
@@ -205,7 +219,7 @@ public final class JunoSettings {
     public Optional<AgentAssignment> resolveAgent(Ticket ticket) {
         Optional<AgentProfile> own = agentProfile(ticket.getAgentProfileId());
         if (own.isPresent()) {
-            return Optional.of(new AgentAssignment(own.get(), AgentAssignment.Level.TICKET, ticket.getId()));
+            return Optional.of(new AgentAssignment(own.get(), AgentAssignment.Level.TICKET, ticket.getTitle()));
         }
         Optional<Project> project = project(ticket.getProjectId());
         if (project.isEmpty()) {

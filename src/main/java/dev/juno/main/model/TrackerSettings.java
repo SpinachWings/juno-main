@@ -7,8 +7,8 @@ public final class TrackerSettings {
     /** GitLab instance URL or GitHub API URL. */
     private String apiUrl = "";
     /**
-     * Access token, or {@code env:VARIABLE} to read it from Juno's environment. When blank the MCP server
-     * inherits GITLAB_TOKEN / GITHUB_TOKEN from Juno's environment.
+     * Access token, or {@code env:VARIABLE} to read it from an environment variable you name. When blank the MCP
+     * server runs without a token (public data only); nothing is inherited from Juno's environment.
      */
     private String token = "";
 

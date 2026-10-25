@@ -98,8 +98,9 @@ final class SettingsDialog extends Dialog<JunoSettings> {
     private final ComboBox<Organisation> projectOrg = new ComboBox<>();
     private final TextField projectPath = new TextField();
     private final ColorPicker projectColor = new ColorPicker();
-    private final TextField projectGitlab = new TextField();
-    private final TextField projectGithub = new TextField();
+    /** Where the project's repository lives: GitHub or GitLab (one or the other, never both). */
+    private final ComboBox<TrackerKind> projectHost = new ComboBox<>();
+    private final TextField projectRepo = new TextField();
     private final ComboBox<Item> projectAgent = new ComboBox<>();
     private final TextField projectTools = new TextField();
     private Node projectForm;
@@ -116,7 +117,7 @@ final class SettingsDialog extends Dialog<JunoSettings> {
     private final Spinner<Integer> maxTurns = new Spinner<>(0, 1000, 0, 5);
     private final TextField extraArgs = new TextField();
     private final CheckBox exposeMcp =
-            new CheckBox("Give agents their organisation's GitLab/GitHub MCP tools (read issues, add comments)");
+            new CheckBox("Give agents their organisation's GitLab/GitHub MCP tools (read issues and review comments)");
     private final Label agentUsage = new Label();
     private final GridPane agentForm = new GridPane();
 
@@ -168,6 +169,14 @@ final class SettingsDialog extends Dialog<JunoSettings> {
 
         ButtonType save = new ButtonType("Save", ButtonBar.ButtonData.OK_DONE);
         getDialogPane().getButtonTypes().addAll(save, ButtonType.CANCEL);
+        getDialogPane().lookupButton(save).addEventFilter(javafx.event.ActionEvent.ACTION, e -> {
+            List<String> problems = validate();
+            if (!problems.isEmpty()) {
+                e.consume(); // keep the dialog open
+                Fx.error(getDialogPane().getScene().getWindow(), "Settings need fixing",
+                        String.join("\n", problems));
+            }
+        });
         setResultConverter(button -> {
             if (button != save) {
                 // Discard the files of skills uploaded in this dialog.
@@ -179,6 +188,37 @@ final class SettingsDialog extends Dialog<JunoSettings> {
             working.normalise();
             return working;
         });
+    }
+
+    /** Problems that would stop projects from working; Save is refused until they are fixed. */
+    private List<String> validate() {
+        List<String> problems = new ArrayList<>();
+        java.util.regex.Pattern githubRepo = java.util.regex.Pattern.compile("[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+");
+        java.util.regex.Pattern gitlabProject = java.util.regex.Pattern.compile("([^/\\s]+/)+[^/\\s]+|\\d+");
+        for (Project p : working.getProjects()) {
+            String name = "Project '" + p.getName() + "'";
+            if (p.getName() == null || p.getName().isBlank()) {
+                problems.add("A project has no name.");
+            }
+            if (p.hasBothHosts()) {
+                problems.add(name + " has both a GitHub repo and a GitLab project; keep one.");
+                continue;
+            }
+            TrackerKind host = p.host();
+            if (host == null) {
+                continue; // allowed while setting up; Juno explains what's missing when a ticket is started
+            }
+            String location = p.location(host);
+            boolean valid = (host == TrackerKind.GITHUB ? githubRepo : gitlabProject).matcher(location).matches();
+            if (!valid) {
+                problems.add(name + ": '" + location + "' isn't a valid " + host.displayName() + " "
+                        + (host == TrackerKind.GITHUB ? "repository (owner/repo)." : "project (group/project or ID)."));
+            }
+            working.organisation(p.getOrgId()).filter(o -> !o.tracker(host).isEnabled())
+                    .ifPresent(o -> problems.add(name + " is hosted on " + host.displayName() + ", but "
+                            + host.displayName() + " isn't enabled for organisation '" + o.getName() + "'."));
+        }
+        return problems;
     }
 
     // =========================================================================================
@@ -274,8 +314,7 @@ final class SettingsDialog extends Dialog<JunoSettings> {
             CheckBox enabled = new CheckBox("Enable " + kind.displayName() + " for this organisation");
             TextField url = new TextField();
             PasswordField token = new PasswordField();
-            token.setPromptText("Token, env:VARIABLE, or blank to inherit "
-                    + (kind == TrackerKind.GITLAB ? "GITLAB_TOKEN" : "GITHUB_TOKEN"));
+            token.setPromptText("Access token (or env:VARIABLE)");
             Label result = new Label();
             result.setWrapText(true);
             Button test = new Button("Test connection");
@@ -332,8 +371,19 @@ final class SettingsDialog extends Dialog<JunoSettings> {
         HBox.setHgrow(projectPath, Priority.ALWAYS);
 
         projectPath.setPromptText("Local checkout the agents work in");
-        projectGitlab.setPromptText("group/project (optional)");
-        projectGithub.setPromptText("owner/repo (optional)");
+        projectHost.getItems().setAll(TrackerKind.GITHUB, TrackerKind.GITLAB);
+        projectHost.setConverter(new javafx.util.StringConverter<>() {
+            @Override
+            public String toString(TrackerKind kind) {
+                return kind == null ? "" : kind.displayName();
+            }
+
+            @Override
+            public TrackerKind fromString(String text) {
+                return null;
+            }
+        });
+        projectHost.setMaxWidth(Double.MAX_VALUE);
         projectTools.setPromptText("e.g. Bash(mvn test:*) Bash(npm run lint)");
         projectOrg.setMaxWidth(Double.MAX_VALUE);
         projectAgent.setMaxWidth(Double.MAX_VALUE);
@@ -344,11 +394,12 @@ final class SettingsDialog extends Dialog<JunoSettings> {
         grid.addRow(row++, new Label("Organisation"), projectOrg);
         grid.addRow(row++, new Label("Directory"), pathRow);
         grid.addRow(row++, new Label("Colour"), projectColor);
-        grid.addRow(row++, new Label("GitLab project"), projectGitlab);
-        grid.addRow(row++, new Label("GitHub repo"), projectGithub);
-        grid.add(hint("Tickets in this project are tinted with its colour. Issues imported from the GitLab "
-                + "project / GitHub repo above are linked to this project automatically, and uploads default to "
-                + "them. Both use the organisation's credentials."), 1, row++);
+        grid.addRow(row++, new Label("Hosted on"), projectHost);
+        grid.addRow(row++, new Label("Repository"), projectRepo);
+        grid.add(hint("A project lives on GitHub or on GitLab, not both. Agents' pull/merge requests are opened "
+                + "there, issues imported from it are linked to this project automatically, and uploads go to it, "
+                + "all with the organisation's credentials for that host. Tickets are tinted with the project's "
+                + "colour."), 1, row++);
         grid.add(sectionTitle("Agent"), 0, row++, 2, 1);
         grid.addRow(row++, new Label("Agent"), projectAgent);
         grid.addRow(row++, new Label("Extra allowed tools"), projectTools);
@@ -361,8 +412,14 @@ final class SettingsDialog extends Dialog<JunoSettings> {
             tree.refresh();
         });
         bind(projectPath, Project.class, (p, v) -> p.setPath(v));
-        bind(projectGitlab, Project.class, (p, v) -> p.setGitlabProject(v));
-        bind(projectGithub, Project.class, (p, v) -> p.setGithubRepo(v));
+        bind(projectRepo, Project.class, (p, v) -> p.setRepository(projectHost.getValue(), v));
+        projectHost.valueProperty().addListener((obs, old, kind) -> {
+            projectRepo.setPromptText(kind == TrackerKind.GITLAB ? "group/project, e.g. acme/web"
+                    : "owner/repo, e.g. acme/web");
+            if (!loading && selected() instanceof Project p && kind != null) {
+                p.setRepository(kind, projectRepo.getText());
+            }
+        });
         bind(projectTools, Project.class, (p, v) -> p.setExtraAllowedTools(v));
         projectColor.valueProperty().addListener((obs, old, value) -> {
             if (!loading && selected() instanceof Project p && value != null) {
@@ -446,8 +503,16 @@ final class SettingsDialog extends Dialog<JunoSettings> {
                 projectOrg.setValue(working.organisation(p.getOrgId()).orElse(null));
                 projectPath.setText(p.getPath());
                 projectColor.setValue(Fx.parseColor(p.getColor(), Color.GRAY));
-                projectGitlab.setText(p.getGitlabProject());
-                projectGithub.setText(p.getGithubRepo());
+                TrackerKind host = p.host();
+                if (host == null) {
+                    // Default to whichever host the organisation has enabled (GitHub if both or neither).
+                    host = working.organisation(p.getOrgId())
+                            .filter(o -> o.tracker(TrackerKind.GITLAB).isEnabled()
+                                    && !o.tracker(TrackerKind.GITHUB).isEnabled())
+                            .map(o -> TrackerKind.GITLAB).orElse(TrackerKind.GITHUB);
+                }
+                projectHost.setValue(host);
+                projectRepo.setText(p.location(host));
                 projectTools.setText(p.getExtraAllowedTools());
                 String inherited = working.organisation(p.getOrgId())
                         .map(o -> "Inherit from organisation: " + working.agentProfile(o.getAgentProfileId())
@@ -735,8 +800,9 @@ final class SettingsDialog extends Dialog<JunoSettings> {
         HBox javaRow = new HBox(6, javaExecutable, fileBrowse(javaExecutable, "Java executable"));
         HBox.setHgrow(javaExecutable, Priority.ALWAYS);
         grid.addRow(row++, new Label("Java for MCP servers"), javaRow);
-        grid.add(hint("The same jars serve every organisation; each organisation gets its own server process "
-                + "with its own credentials."), 1, row++);
+        grid.add(hint("The servers need no setup of their own: if a jar is missing, Juno builds it (mvn package) "
+                + "the first time it's needed. The same jars serve every organisation; each organisation gets its "
+                + "own server process with only the token set for it here in Juno."), 1, row++);
         grid.add(sectionTitle("Agents"), 0, row++, 2, 1);
         maxAgents.getValueFactory().setValue(Math.max(1, working.getMaxConcurrentAgents()));
         grid.addRow(row++, new Label("Max concurrent agents"), maxAgents);

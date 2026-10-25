@@ -19,7 +19,7 @@ public final class Ticket {
     private String initialInstructions = "";
     /** Branch the work branches off and the pull request targets. */
     private String baseBranch = "main";
-    /** Branch the agent works on; blank = generated from the ticket id and title on Start. */
+    /** Branch the agent works on; blank = generated from the ticket title on Start. */
     private String branchName = "";
     /** Git worktree the agent works in (set once work starts; the branch is fixed from then on). */
     private String worktreePath;

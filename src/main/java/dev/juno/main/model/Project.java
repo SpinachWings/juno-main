@@ -92,6 +92,39 @@ public final class Project {
         this.extraAllowedTools = extraAllowedTools;
     }
 
+    /**
+     * Where the project's repository is hosted: GitHub or GitLab, never both. Null if neither is set.
+     */
+    public TrackerKind host() {
+        if (!location(TrackerKind.GITHUB).isEmpty()) {
+            return TrackerKind.GITHUB;
+        }
+        if (!location(TrackerKind.GITLAB).isEmpty()) {
+            return TrackerKind.GITLAB;
+        }
+        return null;
+    }
+
+    /** True if both a GitHub repo and a GitLab project are set (not allowed; see {@link #host()}). */
+    public boolean hasBothHosts() {
+        return !location(TrackerKind.GITHUB).isEmpty() && !location(TrackerKind.GITLAB).isEmpty();
+    }
+
+    /** Sets the repository on one host and clears the other, so a project only ever has one. */
+    public void setRepository(TrackerKind kind, String location) {
+        String v = location == null ? "" : location.trim();
+        if (kind == null || v.isEmpty()) {
+            gitlabProject = "";
+            githubRepo = "";
+        } else if (kind == TrackerKind.GITLAB) {
+            gitlabProject = v;
+            githubRepo = "";
+        } else {
+            githubRepo = v;
+            gitlabProject = "";
+        }
+    }
+
     /** The configured remote location for the given tracker, or an empty string. */
     public String location(TrackerKind kind) {
         String v = kind == TrackerKind.GITLAB ? gitlabProject : githubRepo;

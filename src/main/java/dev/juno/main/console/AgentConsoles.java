@@ -105,8 +105,18 @@ public final class AgentConsoles implements AutoCloseable {
         return variant == null || variant.isBlank() ? ticketId : ticketId + "-" + variant;
     }
 
-    public static String windowTitle(String ticketId, String variant) {
-        return "Juno " + ticketId + ("review".equals(variant) ? " AI review" : "");
+    /** Terminal window title: the ticket's title (plain characters only, so every shell accepts it). */
+    public static String windowTitle(String ticketTitle, String variant) {
+        String name = ticketTitle == null ? "" : ticketTitle.replaceAll("[^\\p{L}\\p{N} .,_()-]", "")
+                .replaceAll("\\s+", " ").strip();
+        if (name.length() > 50) {
+            name = name.substring(0, 50).strip();
+        }
+        return "Juno - " + (name.isEmpty() ? "ticket" : name) + ("review".equals(variant) ? " (AI review)" : "");
+    }
+
+    private String windowTitleFor(String ticketId, String variant) {
+        return windowTitle(backend.state(ticketId).map(TicketState::title).orElse(""), variant);
     }
 
     /** Whether the console with this key has polled recently (or was just opened). */
@@ -128,7 +138,7 @@ public final class AgentConsoles implements AutoCloseable {
      * @return a short description of what happened, for the status bar
      */
     public String show(String ticketId, String variant, String terminalCommand) throws IOException {
-        String title = windowTitle(ticketId, variant);
+        String title = windowTitleFor(ticketId, variant);
         if (isOpen(key(ticketId, variant))) {
             if (launcher.focus(title)) {
                 return "Switched to '" + title + "'";
@@ -143,7 +153,7 @@ public final class AgentConsoles implements AutoCloseable {
         String consoleKey = key(ticketId, variant);
         lastSeen.put(consoleKey, System.currentTimeMillis()); // avoid opening twice while it starts
         try {
-            launcher.open(safe(consoleKey), windowTitle(ticketId, variant), consoleCommand(ticketId, consoleKey),
+            launcher.open(safe(consoleKey), windowTitleFor(ticketId, variant), consoleCommand(ticketId, consoleKey),
                     terminalCommand);
         } catch (IOException e) {
             lastSeen.remove(consoleKey);

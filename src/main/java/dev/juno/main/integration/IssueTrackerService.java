@@ -104,6 +104,31 @@ public final class IssueTrackerService implements AutoCloseable {
         return comments;
     }
 
+    /** Posts a comment (the AI review summary) on a pull/merge request. */
+    public void commentOnPullRequest(Organisation org, TrackerKind kind, String location, long number, String body)
+            throws McpException {
+        ObjectNode args = args(kind, location);
+        args.put("number", number);
+        args.put("body", body);
+        client(org, kind).callTool(kind.pullRequestCommentTool(), args);
+    }
+
+    /** Result of {@link #checkRepository}. */
+    public record RepositoryCheck(boolean exists, String defaultBranch, Boolean branchExists) {
+    }
+
+    /** Read-only check that a repository (and optionally a branch in it) exists and the token can see it. */
+    public RepositoryCheck checkRepository(Organisation org, TrackerKind kind, String location, String branch)
+            throws McpException {
+        ObjectNode args = args(kind, location);
+        if (branch != null && !branch.isBlank()) {
+            args.put("branch", branch.trim());
+        }
+        JsonNode r = client(org, kind).callTool("check_repository", args);
+        return new RepositoryCheck(r.path("exists").asBoolean(false), r.path("defaultBranch").asText(""),
+                r.has("branchExists") ? r.get("branchExists").asBoolean() : null);
+    }
+
     /** Starts (if needed) the organisation's server and returns its tool names; used by Settings' "Test". */
     public List<String> test(Organisation org, TrackerKind kind) throws McpException {
         return client(org, kind).listTools();
@@ -159,36 +184,51 @@ public final class IssueTrackerService implements AutoCloseable {
         }
     }
 
-    /** Command line used to launch the MCP server for a tracker. Also used for agents' MCP config. */
+    /**
+     * Command line used to launch the MCP server for a tracker. Also used for agents' MCP config. If the jar
+     * hasn't been built yet but its project is next to it (the usual {@code juno/<server>/target/<server>.jar}
+     * layout), it is built with Maven first, so the servers need no setup.
+     */
     public static List<String> command(JunoSettings s, TrackerKind kind) throws McpException {
         String jar = s.mcpJar(kind);
-        if (jar == null || jar.isBlank() || !Files.isRegularFile(Path.of(jar))) {
-            String artifact = kind == TrackerKind.GITLAB ? "juno-gitlab-mcp" : "juno-github-mcp";
-            throw new McpException(kind.displayName() + " MCP server jar not found"
-                    + (jar == null || jar.isBlank() ? "" : " at " + jar)
-                    + ". Build it with 'mvn package' in " + artifact
-                    + " and set its path in Settings → General.");
+        String artifact = kind == TrackerKind.GITLAB ? "juno-gitlab-mcp" : "juno-github-mcp";
+        if (jar == null || jar.isBlank()) {
+            throw new McpException("No path is set for the " + kind.displayName() + " MCP server (" + artifact
+                    + ".jar). Set it in Settings → General.");
         }
-        return List.of(javaExecutable(s), "-jar", jar);
+        Path jarPath = Path.of(jar.trim());
+        if (!Files.isRegularFile(jarPath)) {
+            McpJars.build(jarPath, artifact);
+        }
+        return List.of(javaExecutable(s), "-jar", jarPath.toString());
     }
 
     /**
-     * Environment for an organisation's MCP server process. A blank token means "inherit GITLAB_TOKEN /
-     * GITHUB_TOKEN from Juno's environment"; {@code env:VAR} reads the token from another variable.
+     * Environment for an organisation's MCP server process: the organisation's token and API URL from Juno's
+     * settings, and nothing inherited. Every variable the servers read is set explicitly (blank when unset), so
+     * a GITHUB_TOKEN / GITLAB_TOKEN in Juno's own environment can never leak into another organisation's server.
+     * {@code env:VAR} as the token reads it from a variable you name, which is still configured in Juno.
      */
     public static Map<String, String> environment(Organisation org, TrackerKind kind) {
         TrackerSettings t = org.tracker(kind);
         Map<String, String> env = new HashMap<>();
-        String urlVar = kind == TrackerKind.GITLAB ? "GITLAB_URL" : "GITHUB_API_URL";
-        String tokenVar = kind == TrackerKind.GITLAB ? "GITLAB_TOKEN" : "GITHUB_TOKEN";
-        if (t.getApiUrl() != null && !t.getApiUrl().isBlank()) {
-            env.put(urlVar, t.getApiUrl().trim());
-        }
+        String url = t.getApiUrl() == null ? "" : t.getApiUrl().trim();
         String token = t.resolvedToken();
-        if (token != null) {
-            env.put(tokenVar, token);
+        if (kind == TrackerKind.GITLAB) {
+            env.put("GITLAB_URL", url.isEmpty() ? "https://gitlab.com" : url);
+            env.put("GITLAB_TOKEN", token == null ? "" : token);
+        } else {
+            env.put("GITHUB_API_URL", url.isEmpty() ? "https://api.github.com" : url);
+            env.put("GITHUB_TOKEN", token == null ? "" : token);
+            env.put("GH_TOKEN", "");
         }
         return env;
+    }
+
+    /** True if the organisation has a token for the tracker (directly or via {@code env:VAR}). */
+    public static boolean hasToken(Organisation org, TrackerKind kind) {
+        String token = org.tracker(kind).resolvedToken();
+        return token != null && !token.isBlank();
     }
 
     public static String javaExecutable(JunoSettings s) {

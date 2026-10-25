@@ -18,10 +18,9 @@ public final class PromptBuilder {
 
     public static String initial(Ticket ticket, Project project, boolean trackerToolsAvailable) {
         StringBuilder sb = new StringBuilder();
-        sb.append("You are an autonomous software engineer working on ticket ").append(ticket.getId())
-                .append(" in the ").append(project.getName())
+        sb.append("You are an autonomous software engineer working on a ticket in the ").append(project.getName())
                 .append(" repository (your current working directory).\n\n");
-        sb.append("# ").append(ticket.getId()).append(": ").append(ticket.getTitle()).append("\n\n");
+        sb.append("# ").append(ticket.getTitle()).append("\n\n");
         sb.append(ticket.getDescription().isBlank() ? "(no description provided)" : ticket.getDescription().strip())
                 .append("\n\n");
 
@@ -60,10 +59,9 @@ public final class PromptBuilder {
     /** Design run: a conversation with the human that ends in an approved design doc; no code changes. */
     public static String design(Ticket ticket, Project project, boolean trackerToolsAvailable) {
         StringBuilder sb = new StringBuilder();
-        sb.append("You are a senior software engineer writing a design doc for ticket ").append(ticket.getId())
-                .append(" in the ").append(project.getName())
+        sb.append("You are a senior software engineer writing a design doc for a ticket in the ").append(project.getName())
                 .append(" repository (your current working directory), together with a human.\n\n");
-        sb.append("# ").append(ticket.getId()).append(": ").append(ticket.getTitle()).append("\n\n");
+        sb.append("# ").append(ticket.getTitle()).append("\n\n");
         sb.append(ticket.getDescription().isBlank() ? "(no description provided)" : ticket.getDescription().strip())
                 .append("\n\n");
         if (!ticket.getInitialInstructions().isBlank()) {
@@ -97,7 +95,7 @@ public final class PromptBuilder {
 
     public static String resume(Ticket ticket, String answer) {
         if (ticket.getRunKind() == RunKind.DESIGN) {
-            return "Reply from the human about the design for ticket " + ticket.getId() + ":\n\n" + answer.strip()
+            return "Reply from the human about the design for \"" + ticket.getTitle() + "\":\n\n" + answer.strip()
                     + "\n\nContinue the design conversation. Ask further questions with the "
                     + StreamJsonParser.DECISION_MARKER + " line if needed; otherwise reply with the FULL updated "
                     + "design doc wrapped in " + DesignDocs.OPEN + " ... " + DesignDocs.CLOSE
@@ -108,7 +106,7 @@ public final class PromptBuilder {
                         + ticket.getBranchName() + "`, do not push, and end with a summary (or the "
                         + StreamJsonParser.DECISION_MARKER + " line if you need another decision)."
                 : rules(ticket);
-        return "Human decision for ticket " + ticket.getId() + ":\n\n" + answer.strip()
+        return "Human decision for \"" + ticket.getTitle() + "\":\n\n" + answer.strip()
                 + "\n\nContinue with this decision.\n\n" + rest;
     }
 
@@ -124,10 +122,9 @@ public final class PromptBuilder {
         StringBuilder sb = new StringBuilder();
         sb.append("You are an autonomous software engineer addressing review feedback on ")
                 .append(pr.tracker().pullRequestNoun()).append(' ').append(pr.display())
-                .append(" (").append(pr.url()).append(") for ticket ").append(ticket.getId())
-                .append(" in the ").append(project.getName())
+                .append(" (").append(pr.url()).append(") for a ticket in the ").append(project.getName())
                 .append(" repository (your current working directory).\n\n");
-        sb.append("# ").append(ticket.getId()).append(": ").append(ticket.getTitle()).append("\n\n");
+        sb.append("# ").append(ticket.getTitle()).append("\n\n");
         sb.append(ticket.getDescription().isBlank() ? "(no description provided)" : ticket.getDescription().strip())
                 .append("\n\n");
         if (ticket.getLastSummary() != null && !ticket.getLastSummary().isBlank()) {
@@ -180,7 +177,7 @@ public final class PromptBuilder {
     public static String recoveryResume(Ticket ticket, String recap, String gitState) {
         return """
                 Juno was stopped (for example the computer restarted or Juno closed) while you were working on \
-                ticket %1$s, so your previous run was cut off. Your conversation so far has been restored.
+                the ticket "%1$s", so your previous run was cut off. Your conversation so far has been restored.
 
                 ## What Juno recorded before the interruption
                 %2$s
@@ -190,7 +187,7 @@ public final class PromptBuilder {
                 Pick up exactly where you left off. Re-check anything that may have been cut short (a file edit, a \
                 command or build that was running, a commit that may not have happened) before moving on, and \
                 don't redo work that is already done. %5$s
-                """.formatted(ticket.getId(), recap, ticket.getBranchName(), gitState,
+                """.formatted(ticket.getTitle(), recap, ticket.getBranchName(), gitState,
                 ticket.getRunKind() == RunKind.DESIGN
                         ? "You were writing a design doc: don't modify files; ask questions with the "
                                 + StreamJsonParser.DECISION_MARKER + " line or reply with the full doc in "

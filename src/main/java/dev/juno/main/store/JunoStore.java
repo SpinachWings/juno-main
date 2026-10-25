@@ -85,6 +85,13 @@ public final class JunoStore {
         return home;
     }
 
+    /** Changes made to settings while loading them (e.g. migrations), for Juno to report once. */
+    private final List<String> settingsNotes = new ArrayList<>();
+
+    public List<String> settingsNotes() {
+        return List.copyOf(settingsNotes);
+    }
+
     public JunoSettings loadSettings() {
         Path file = home.resolve("settings.json");
         if (!Files.exists(file)) {
@@ -101,7 +108,17 @@ public final class JunoStore {
         } catch (IOException e) {
             settings = read(file, JunoSettings.class, JunoSettings::createDefault);
         }
-        settings.normalise();
+        List<String> notes = settings.normalise();
+        if (!notes.isEmpty()) {
+            try {
+                Files.copy(file, file.resolveSibling("settings.pre-single-host.json"), StandardCopyOption.REPLACE_EXISTING);
+            } catch (IOException e) {
+                // best effort backup
+            }
+            notes.forEach(n -> System.err.println("[juno] " + n));
+            settingsNotes.addAll(notes);
+            saveSettings(settings);
+        }
         return settings;
     }
 

@@ -19,9 +19,9 @@ class GitWorkspaceTest {
 
     @Test
     void suggestsBranchNames() {
-        assertEquals("juno/juno-12-add-login-page", GitWorkspace.suggestBranchName("JUNO-12", "Add login page!"));
-        assertEquals("juno/juno-3", GitWorkspace.suggestBranchName("JUNO-3", "  "));
-        assertTrue(GitWorkspace.suggestBranchName("JUNO-4", "x".repeat(200)).length() <= 60);
+        assertEquals("juno/add-login-page", GitWorkspace.suggestBranchName("Add login page!"));
+        assertEquals("juno/ticket", GitWorkspace.suggestBranchName("  "));
+        assertTrue(GitWorkspace.suggestBranchName("x".repeat(200)).length() <= 60);
     }
 
     @Test

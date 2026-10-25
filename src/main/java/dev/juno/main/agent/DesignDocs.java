@@ -45,10 +45,13 @@ public final class DesignDocs {
         return a.equals("/approve") || a.equals("approve") || a.equals("approved");
     }
 
-    /** Writes the ticket's design doc to {@code <folder>/<TICKET>-<title>-design.txt} and returns the file. */
+    /**
+     * Writes the ticket's design doc to {@code <folder>/<title>-design.txt} and returns the file. Re-exporting
+     * overwrites the ticket's own earlier export; another ticket's file with the same name is never overwritten.
+     */
     public static Path export(Ticket ticket, String projectName, Path folder) throws IOException {
         if (ticket.getDesignDoc().isBlank()) {
-            throw new IOException(ticket.getId() + " has no design doc yet");
+            throw new IOException("'" + ticket.getTitle() + "' has no design doc yet");
         }
         Files.createDirectories(folder);
         String slug = ticket.getTitle().toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", "-")
@@ -56,8 +59,13 @@ public final class DesignDocs {
         if (slug.length() > 50) {
             slug = slug.substring(0, 50).replaceAll("-+$", "");
         }
-        Path file = folder.resolve(ticket.getId() + (slug.isEmpty() ? "" : "-" + slug) + "-design.txt");
-        String header = "Design doc: " + ticket.getId() + " - " + ticket.getTitle() + System.lineSeparator()
+        String stem = slug.isEmpty() ? "ticket" : slug;
+        Path previous = ticket.getDesignDocFile() == null ? null : Path.of(ticket.getDesignDocFile()).toAbsolutePath();
+        Path file = folder.resolve(stem + "-design.txt");
+        for (int n = 2; Files.exists(file) && !file.toAbsolutePath().equals(previous); n++) {
+            file = folder.resolve(stem + "-" + n + "-design.txt");
+        }
+        String header = "Design doc: " + ticket.getTitle() + System.lineSeparator()
                 + "Project: " + (projectName == null ? "-" : projectName) + System.lineSeparator()
                 + "Status: " + (ticket.isDesignDocApproved() ? "approved" : "draft")
                 + ("user".equals(ticket.getDesignDocSource()) ? " (written by a person)" : " (written with the agent)")
