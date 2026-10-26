@@ -286,7 +286,7 @@
     -fx-text-fill: -text-bright;
 }
 
-/* "+ New ticket" and "Import issue" share one size. */
+/* "+ New ticket" and "Import" share one size. */
 .toolbar-action {
     -fx-pref-width: 140px;
     -fx-min-width: 140px;
@@ -720,6 +720,3 @@
     -fx-font-size: 11px;
 }
 
-.column-in-ai-review .column-title {
-    -fx-text-fill: -magenta;
-}

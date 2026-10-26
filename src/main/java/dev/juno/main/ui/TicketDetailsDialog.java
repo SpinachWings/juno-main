@@ -158,6 +158,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         form.setHgap(10);
         form.setVgap(10);
         ColumnConstraints labels = new ColumnConstraints();
+        labels.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE); // labels never shrink to "..."
         ColumnConstraints fields = new ColumnConstraints();
         fields.setHgrow(Priority.ALWAYS);
         form.getColumnConstraints().addAll(labels, fields);
@@ -173,6 +174,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
                 branchName.setPromptText(GitWorkspace.suggestBranchName(value)));
         HBox.setHgrow(branchName, Priority.ALWAYS);
         Label branchLabel = new Label("Branch name");
+        branchLabel.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
         HBox branchRow = new HBox(8, baseBranch, branchLabel, branchName);
         branchRow.setAlignment(Pos.CENTER_LEFT);
         branchHint.getStyleClass().add("hint");
@@ -219,6 +221,12 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         pullRequestRow.setAlignment(Pos.CENTER_LEFT);
         links.getChildren().add(pullRequestRow);
         form.addRow(8, new Label("Linked issues"), links);
+        // Field labels keep their full text however narrow the dialog gets (no truncation to "...").
+        for (javafx.scene.Node child : form.getChildren()) {
+            if (child instanceof Label label) {
+                label.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
+            }
+        }
 
         // The sync "menu": filled by refreshSyncButtons() for the selected project's host.
         actionsBox.setPadding(new Insets(0, 0, 0, 16));
@@ -375,7 +383,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
     private void refreshLinks() {
         pullRequestRow.getChildren().clear();
         Label prName = new Label("Pull request:");
-        prName.setMinWidth(55);
+        prName.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
         pullRequestRow.getChildren().add(prName);
         PullRequestRef pr = ticket.getPullRequest();
         if (pr != null) {
@@ -396,7 +404,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
             HBox row = linkRows.get(kind);
             row.getChildren().clear();
             Label name = new Label(kind.displayName() + ":");
-            name.setMinWidth(55);
+            name.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
             row.getChildren().add(name);
             ExternalRef ref = ticket.getRef(kind);
             if (ref == null) {

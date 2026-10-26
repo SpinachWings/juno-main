@@ -80,7 +80,7 @@ public final class BoardView {
         newTicket.setOnAction(e -> newTicket());
 
         newTicket.getStyleClass().add("toolbar-action");
-        MenuButton importIssue = new MenuButton("Import issue");
+        MenuButton importIssue = new MenuButton("Import");
         importIssue.getStyleClass().add("toolbar-action");
         for (TrackerKind kind : TrackerKind.values()) {
             MenuItem item = new MenuItem("From " + kind.displayName());

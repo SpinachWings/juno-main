@@ -92,7 +92,7 @@ previous file is kept as `settings.pre-single-host.json`.
 3. **Settings → General**: for each MCP server, its port and whether Juno starts the jar or connects to a
    server you run (see above); the jar paths (filled in automatically when the repos sit side by side, and
    built automatically if missing); the Java runtime for them; and the overall limit on concurrent agents.
-4. Use **+ New ticket** or **Import issue**. Import asks for the organisation and project first, because
+4. Use **+ New ticket** or **Import**. Import asks for the organisation and project first, because
    their credentials are used. On a card, **Details** opens the ticket menu:
    - edit the title and full description
    - set the organisation, project and agent override
