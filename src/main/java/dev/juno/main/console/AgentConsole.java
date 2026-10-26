@@ -98,7 +98,7 @@ public final class AgentConsole {
             JsonNode response;
             try {
                 response = get("stream?ticket=" + enc(ticket) + "&console=" + enc(consoleKey) + "&from=" + offset
-                        + "&state=" + enc(signature) + "&wait=20");
+                        + "&state=" + enc(signature) + "&wait=20&pid=" + ProcessHandle.current().pid());
                 if (failures > 0) {
                     out.println("[juno] reconnected");
                 }

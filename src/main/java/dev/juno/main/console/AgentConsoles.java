@@ -59,7 +59,10 @@ public final class AgentConsoles implements AutoCloseable {
         }
     }
 
-    private static final long ALIVE_MS = 45_000;
+    /** How long a just-launched terminal counts as open before its console has connected. */
+    private static final long STARTING_MS = 20_000;
+    /** A console that hasn't polled for this long is gone, whatever its process looks like. */
+    private static final long POLL_GRACE_MS = 45_000;
     private static final int MAX_CHUNK = 256 * 1024;
 
     private final Backend backend;
@@ -68,6 +71,11 @@ public final class AgentConsoles implements AutoCloseable {
     private final String token;
     private final HttpServer server;
     private final ObjectMapper mapper = new ObjectMapper();
+    /** When each console was last launched by Juno (cleared once it connects). */
+    private final Map<String, Long> starting = new ConcurrentHashMap<>();
+    /** Process id of each connected console, so a closed terminal is noticed immediately. */
+    private final Map<String, Long> consolePids = new ConcurrentHashMap<>();
+    /** When each console last polled. */
     private final Map<String, Long> lastSeen = new ConcurrentHashMap<>();
 
     public AgentConsoles(Backend backend, Path home, Consumer<String> log) throws IOException {
@@ -119,10 +127,27 @@ public final class AgentConsoles implements AutoCloseable {
         return windowTitle(backend.state(ticketId).map(TicketState::title).orElse(""), variant);
     }
 
-    /** Whether the console with this key has polled recently (or was just opened). */
+    /**
+     * Whether the console with this key is open: its process is still running (closing or force-closing the
+     * terminal ends it, which is noticed at once), or Juno launched it moments ago and it hasn't connected yet.
+     */
     public boolean isOpen(String consoleKey) {
+        long now = System.currentTimeMillis();
+        Long launched = starting.get(consoleKey);
+        if (launched != null && now - launched < STARTING_MS) {
+            return true;
+        }
         Long seen = lastSeen.get(consoleKey);
-        return seen != null && System.currentTimeMillis() - seen < ALIVE_MS;
+        if (seen == null || now - seen >= POLL_GRACE_MS) {
+            return false;
+        }
+        Long pid = consolePids.get(consoleKey);
+        if (pid != null && !ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false)) {
+            consolePids.remove(consoleKey, pid);
+            lastSeen.remove(consoleKey, seen);
+            return false;
+        }
+        return true;
     }
 
     /** Opens a console for the ticket's run unless one is already open. */
@@ -139,24 +164,24 @@ public final class AgentConsoles implements AutoCloseable {
      */
     public String show(String ticketId, String variant, String terminalCommand) throws IOException {
         String title = windowTitleFor(ticketId, variant);
-        if (isOpen(key(ticketId, variant))) {
-            if (launcher.focus(title)) {
-                return "Switched to '" + title + "'";
-            }
-            return "The terminal is already open: look for the window titled '" + title + "'";
+        if (isOpen(key(ticketId, variant)) && launcher.focus(title)) {
+            return "Switched to '" + title + "'";
         }
+        // Closed (or its window can't be found to bring forward): open a fresh one. It replays the log.
         open(ticketId, variant, terminalCommand);
         return "Opened '" + title + "'";
     }
 
     private void open(String ticketId, String variant, String terminalCommand) throws IOException {
         String consoleKey = key(ticketId, variant);
-        lastSeen.put(consoleKey, System.currentTimeMillis()); // avoid opening twice while it starts
+        starting.put(consoleKey, System.currentTimeMillis()); // avoid opening twice while it starts
+        consolePids.remove(consoleKey);
+        lastSeen.remove(consoleKey);
         try {
             launcher.open(safe(consoleKey), windowTitleFor(ticketId, variant), consoleCommand(ticketId, consoleKey),
                     terminalCommand);
         } catch (IOException e) {
-            lastSeen.remove(consoleKey);
+            starting.remove(consoleKey);
             throw e;
         }
     }
@@ -199,12 +224,17 @@ public final class AgentConsoles implements AutoCloseable {
             long from = parseLong(q.get("from"), 0);
             String clientSig = q.getOrDefault("state", "");
             long waitMs = Math.min(25, Math.max(0, parseLong(q.get("wait"), 20))) * 1000;
+            long pid = parseLong(q.get("pid"), 0);
+            if (pid > 0) {
+                consolePids.put(consoleKey, pid);
+            }
+            lastSeen.put(consoleKey, System.currentTimeMillis());
+            starting.remove(consoleKey);
 
             Path log = backend.logFile(ticketId);
             long deadline = System.currentTimeMillis() + waitMs;
             Optional<TicketState> state;
             while (true) {
-                lastSeen.put(consoleKey, System.currentTimeMillis());
                 state = backend.state(ticketId);
                 long size = Files.exists(log) ? Files.size(log) : 0;
                 if (from > size) {

@@ -66,7 +66,8 @@ class ConsoleTest {
         Files.writeString(tmp.resolve("log.txt"), "line one\nline two\npartial");
         try (var consoles = new AgentConsoles(backend, tmp, l -> { })) {
             HttpClient http = HttpClient.newBuilder().proxy(HttpClient.Builder.NO_PROXY).build();
-            String url = "http://127.0.0.1:" + consoles.port() + "/api/stream?ticket=JUNO-1&from=0&wait=0";
+            String url = "http://127.0.0.1:" + consoles.port() + "/api/stream?ticket=JUNO-1&from=0&wait=0&pid="
+                    + ProcessHandle.current().pid();
             var denied = http.send(HttpRequest.newBuilder(URI.create(url)).build(), HttpResponse.BodyHandlers.ofString());
             assertEquals(403, denied.statusCode());
 
@@ -78,6 +79,15 @@ class ConsoleTest {
             assertFalse(ok.body().contains("partial")); // incomplete last line is held back
             assertTrue(consoles.isOpen("JUNO-1"));
             assertFalse(consoles.isOpen("JUNO-9"));
+
+            // A console whose process has ended (terminal closed or force-closed) is closed at once.
+            Process gone = new ProcessBuilder("java", "-version").start();
+            gone.waitFor();
+            String deadUrl = "http://127.0.0.1:" + consoles.port() + "/api/stream?ticket=JUNO-1&console=JUNO-1-review"
+                    + "&from=0&wait=0&pid=" + gone.pid();
+            http.send(HttpRequest.newBuilder(URI.create(deadUrl)).header("X-Juno-Token", token).build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertFalse(consoles.isOpen("JUNO-1-review"));
         }
     }
 }
