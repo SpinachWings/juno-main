@@ -467,20 +467,12 @@ public final class BoardView {
             }
 
             @Override
-            public void reopen(Ticket t, Window owner) {
-                TicketStatus target = t.getPullRequest() != null ? TicketStatus.REVIEW : TicketStatus.PENDING;
-                if (Fx.confirm(owner, "Remove " + name(t) + " from Done?",
-                        name(t) + " goes back to " + target.label() + ".")) {
-                    move(t, target, owner);
-                }
-            }
-
-            @Override
             public void delete(Ticket t, Window owner) {
                 if (Fx.confirm(owner, "Delete " + name(t) + "?",
-                        "This removes the ticket from Juno, with its working copy (including any uncommitted "
-                                + "changes) and its agent logs. Its branch, pull request and linked issue on "
-                                + "GitHub/GitLab are kept.")) {
+                        "This removes the ticket from Juno with everything its agents left behind: the working "
+                                + "copy (including any uncommitted changes), Juno's logs and run records, the "
+                                + "agents' Claude Code session history and any open terminals. Its branch, pull "
+                                + "request and linked issue on GitHub/GitLab are kept.")) {
                     service.deleteTicket(t.getId());
                 }
             }

@@ -1,6 +1,4 @@
 # Files of the skill packs bundled with Juno (generated)
-juno-github/SKILL.md
-juno-gitlab/SKILL.md
 superpowers/LICENSE
 superpowers/SOURCE.txt
 superpowers/brainstorming/SKILL.md

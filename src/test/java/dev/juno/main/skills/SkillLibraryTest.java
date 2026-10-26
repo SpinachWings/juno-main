@@ -134,8 +134,7 @@ class SkillLibraryTest {
         JunoSettings s = new JunoSettings();
         assertTrue(lib.installBundled(s));
         List<String> sources = s.getSkills().stream().map(SkillEntry::getSource).toList();
-        assertTrue(sources.containsAll(List.of("bundled:superpowers", "bundled:juno-github", "bundled:juno-gitlab")),
-                sources.toString());
+        assertEquals(List.of("bundled:superpowers"), sources);
         SkillEntry superpowers = s.getSkills().stream()
                 .filter(e -> e.getSource().equals("bundled:superpowers")).findFirst().orElseThrow();
         assertEquals(SkillScope.GLOBAL, superpowers.getScope());
@@ -147,5 +146,21 @@ class SkillLibraryTest {
         s.getSkills().remove(superpowers);
         lib.installBundled(s);
         assertFalse(s.getSkills().stream().anyMatch(e -> e.getSource().equals("bundled:superpowers")));
+    }
+
+    @Test
+    void removesRetiredPacks() throws Exception {
+        var home = tmp.resolve("home2");
+        var lib = new SkillLibrary(home);
+        JunoSettings s = new JunoSettings();
+        Path old = home.resolve("skills").resolve("bundled").resolve("juno-github");
+        Files.createDirectories(old);
+        Files.writeString(old.resolve("SKILL.md"), "---\nname: juno-github\n---\n");
+        s.getSkills().add(new SkillEntry("juno-github (MCP safety rules)", old.toString(), "bundled:juno-github"));
+        s.getBundledSkillsOffered().add("juno-github");
+        assertTrue(lib.installBundled(s));
+        assertFalse(s.getSkills().stream().anyMatch(e -> e.getSource().startsWith("bundled:juno-")));
+        assertFalse(s.getBundledSkillsOffered().contains("juno-github"));
+        assertFalse(Files.exists(old));
     }
 }

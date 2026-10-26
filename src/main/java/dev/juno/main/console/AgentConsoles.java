@@ -250,7 +250,8 @@ public final class AgentConsoles implements AutoCloseable {
 
             ObjectNode body = mapper.createObjectNode();
             if (state.isEmpty()) {
-                body.put("error", "Ticket " + ticketId + " no longer exists");
+                body.put("error", "This ticket was deleted");
+                body.put("deleted", true);
                 respond(exchange, 404, body);
                 return;
             }
@@ -383,6 +384,13 @@ public final class AgentConsoles implements AutoCloseable {
             Thread.sleep(ms);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+        }
+    }
+
+    /** Forgets a deleted ticket's consoles. Their windows close themselves when they next hear from Juno. */
+    public void forget(String ticketId) {
+        for (Map<String, Long> map : List.of(starting, consolePids, lastSeen)) {
+            map.keySet().removeIf(k -> k.equals(ticketId) || k.startsWith(ticketId + "-"));
         }
     }
 

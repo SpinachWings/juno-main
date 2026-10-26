@@ -63,8 +63,6 @@ final class TicketCard {
         void resume(Ticket t, Window owner);
 
         void moveToDone(Ticket t, Window owner);
-
-        void reopen(Ticket t, Window owner);
     }
 
     private TicketCard() {
@@ -300,12 +298,10 @@ final class TicketCard {
                     buttons.getChildren().addAll(logButton(ticket, actions), details);
                 }
                 case DONE -> {
-                    Button reopen = button("Remove from Done", "Take the ticket out of Done: back to "
-                                    + (pr != null ? "Review" : "Pending"),
-                            b -> actions.reopen(ticket, b.getScene().getWindow()));
-                    Button remove = button("Delete", "Delete the ticket from Juno (GitLab/GitHub are not touched)",
+                    Button remove = button("Delete", "Delete the ticket from Juno with everything its agents left "
+                                    + "behind (logs, run records, working copy). GitLab/GitHub are not touched.",
                             b -> actions.delete(ticket, b.getScene().getWindow()));
-                    buttons.getChildren().addAll(reopen, remove);
+                    buttons.getChildren().add(remove);
                     if (hasTerminal) {
                         buttons.getChildren().add(terminal);
                     }

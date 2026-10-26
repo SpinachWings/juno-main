@@ -42,6 +42,41 @@ class ConsoleTest {
     }
 
     @Test
+    void consoleOfDeletedTicketClosesItsWindow() throws Exception {
+        AgentConsoles.Backend backend = new AgentConsoles.Backend() {
+            @Override
+            public Optional<AgentConsoles.TicketState> state(String ticketId) {
+                return Optional.empty(); // the ticket was deleted
+            }
+
+            @Override
+            public Path logFile(String ticketId) {
+                return tmp.resolve("gone.log");
+            }
+
+            @Override
+            public void answer(String ticketId, String answer) {
+            }
+
+            @Override
+            public String exportDesignDoc(String ticketId) {
+                return "x.txt";
+            }
+        };
+        try (var consoles = new AgentConsoles(backend, tmp, l -> { })) {
+            var launcher = new TerminalLauncher(tmp.resolve("consoles"), l -> { }, TerminalLauncher.Os.LINUX);
+            Files.createDirectories(tmp.resolve("consoles"));
+            Path script = launcher.writeScript("GONE", "Juno - gone", consoles.consoleCommand("GONE", "GONE"));
+            Process p = new ProcessBuilder("sh", script.toString()).redirectErrorStream(true).start();
+            assertTrue(p.waitFor(30, java.util.concurrent.TimeUnit.SECONDS), "console should exit by itself");
+            String out = new String(p.getInputStream().readAllBytes());
+            assertTrue(out.contains("This ticket was deleted"), out);
+            assertFalse(out.contains("Console closed"), out); // window closes without waiting for a key
+            assertEquals(0, p.exitValue());
+        }
+    }
+
+    @Test
     void apiRequiresToken() throws Exception {
         AgentConsoles.Backend backend = new AgentConsoles.Backend() {
             @Override

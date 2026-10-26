@@ -10,7 +10,7 @@ A JavaFX orchestrator for Claude Code agents. Tickets move across a six-column b
 | **Review** | PR/MR open (link on the card) and an **AI reviews run** counter. **Run AI review** starts an AI review; **Resolve conflicts** brings the branch up to date with its base branch; **Move to Done** asks for confirmation first. Juno never merges: a human merges the PR in GitLab/GitHub. |
 | **In AI review** | An AI review agent is addressing the PR's comments in its own terminal. When it finishes, its fixes are pushed and the ticket returns to Review. |
 | **Resolving conflicts** | An agent is resolving merge conflicts between the branch and its updated base branch, in its own terminal. When it finishes, Juno pushes the merge and the ticket returns to Review. |
-| **Done** | Finished. **Remove from Done** sends it back to Review (or Pending); **Delete** removes it from Juno, along with its working copy and logs on this computer (its branch, PR and issue stay). |
+| **Done** | Finished. **Delete** removes it from Juno with everything its agents left on this computer: working copy, logs, run records, terminal scripts and Claude Code's session history (its branch, PR and issue stay). To take a ticket out of Done, right-click it → Move to. |
 
 Tickets can be imported from or uploaded to GitLab and GitHub. Juno does this through the
 [`juno-gitlab-mcp`](../juno-gitlab-mcp) and [`juno-github-mcp`](../juno-github-mcp) MCP servers, which
@@ -262,23 +262,26 @@ Bundled with Juno and added at the orchestration level on first start:
   commit in `bundled-skills/superpowers/SOURCE.txt`). `finishing-a-development-branch` and
   `using-git-worktrees` start **switched off** because they conflict with Juno: Juno creates the worktree,
   pushes and opens the PR, and nothing is merged without a human.
-- **juno-github** / **juno-gitlab**: the MCP servers' safety skills, spelling out the only permitted actions
-  and the never-merge rule.
 
 Juno's rules always take precedence over any skill.
 
 ### Never merging
 
-Pull/merge requests are only ever merged by a human, in GitLab/GitHub. This is enforced in three places:
+Pull/merge requests are only ever merged by a human, in GitLab/GitHub. This is enforced in four places:
 - **MCP servers.** They only reach an allowlist of endpoints (copy/paste ticket info, open a PR/MR, read
   review comments, post Juno's AI review and conflict resolution summaries on a PR/MR, and a read-only repository/branch check). Merge,
   approve, auto-merge and rebase endpoints are blocked outright.
+- **Agents have no GitHub/GitLab access.** Only Juno itself talks to the MCP servers; agents are never given
+  their tools or your tokens. Juno pushes branches itself, with your own git login.
 - **Agent command line.** Every agent is started with `--disallowedTools` covering `git push`,
   `git merge`/`rebase`, `gh pr merge`/`review`/`close`, `glab mr merge`/`approve`/`close` and the `gh`/`glab`
   API commands.
-- **Prompts and skills.** They tell agents explicitly never to merge.
+- **Prompts.** They tell agents explicitly never to merge.
 
 Don't add `gh`, `glab` or `curl` to an agent's allowed tools.
+
+Token scopes can't stand in for this: on GitHub, the permissions needed to open a PR also allow merging it.
+For a server-side backstop, protect your base branch (require a pull request with at least one approval).
 
 ### How agents ask for decisions
 
@@ -313,10 +316,15 @@ Everything is stored in `~/.juno` (override with the `JUNO_HOME` environment var
 - `runs/<ticket>/`: the journal and prompt of the ticket's 10 most recent agent runs, used to resume
   interrupted work
 
-Deleting a ticket removes its worktree (with any uncommitted changes), logs, runs and terminal scripts; its
-branch is kept. On start-up Juno also removes these files for tickets that no longer exist (worktrees only if
-they have no uncommitted changes), and agent connection files left by earlier versions.
 - `consoles/`: the scripts that open each ticket's terminal; `console.token` secures the console API
+
+Claude Code also keeps its own history of each agent's session, in `~/.claude/projects/` (one folder per
+worktree, e.g. `C--Users-you--juno-worktrees-<ticket>`).
+
+Deleting a ticket removes its worktree (with any uncommitted changes), logs, runs, terminal scripts and that
+Claude Code history, and closes its terminals; its branch is kept. On start-up Juno also removes these files for
+tickets that no longer exist (worktrees only if they have no uncommitted changes), and agent connection files
+left by earlier versions.
 
 ## Layout
 

@@ -43,12 +43,16 @@ public final class SkillLibrary {
     }
 
     public static final List<Bundled> BUNDLED = List.of(
-            new Bundled("juno-github", "juno-github (MCP safety rules)", List.of()),
-            new Bundled("juno-gitlab", "juno-gitlab (MCP safety rules)", List.of()),
             // These two superpowers skills conflict with how Juno runs agents (Juno creates the worktree, pushes and
             // opens the PR; nothing merges without a human), so they start switched off.
             new Bundled("superpowers", "superpowers",
                     List.of("finishing-a-development-branch", "using-git-worktrees")));
+
+    /**
+     * Packs Juno used to ship and no longer does (the GitHub/GitLab tool guides: agents don't get those tools).
+     * They are removed from the settings and the library on start-up.
+     */
+    static final List<String> RETIRED = List.of("juno-github", "juno-gitlab");
 
     /** Folder prefix for skills Juno copies into a worktree. */
     public static final String WORKTREE_PREFIX = "juno-";
@@ -190,6 +194,11 @@ public final class SkillLibrary {
      */
     public boolean installBundled(JunoSettings settings) {
         boolean changed = false;
+        for (String retired : RETIRED) {
+            changed |= settings.getSkills().removeIf(e -> e.getSource().equals("bundled:" + retired));
+            changed |= settings.getBundledSkillsOffered().remove(retired);
+            deleteTree(root.resolve("bundled").resolve(retired));
+        }
         List<String> index = readIndex();
         for (Bundled b : BUNDLED) {
             Path target = root.resolve("bundled").resolve(b.pack());

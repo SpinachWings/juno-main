@@ -62,6 +62,13 @@ final class Terminals {
         return consoles != null && consoles.isOpen(AgentConsoles.key(ticketId, consoleVariant(kind)));
     }
 
+    /** A deleted ticket's terminals close themselves; this forgets them. */
+    void forget(String ticketId) {
+        if (consoles != null) {
+            consoles.forget(ticketId);
+        }
+    }
+
     void close() {
         if (consoles != null) {
             consoles.close();

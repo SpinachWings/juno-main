@@ -131,6 +131,7 @@ final class TerminalLauncher {
                 sb.append(i == 0 ? "" : " ").append(cmdQuote(command.get(i)));
             }
             sb.append("\r\n");
+            sb.append("if errorlevel ").append(AgentConsole.TICKET_DELETED).append(" exit\r\n");
             sb.append("echo.\r\n");
             sb.append("echo Console closed. Press any key to close this window.\r\n");
             sb.append("pause >nul\r\n");
@@ -144,6 +145,7 @@ final class TerminalLauncher {
                 sb.append(i == 0 ? "" : " ").append(shQuote(command.get(i)));
             }
             sb.append("\n");
+            sb.append("[ $? -eq ").append(AgentConsole.TICKET_DELETED).append(" ] && exit 0\n");
             sb.append("echo\n");
             sb.append("printf 'Console closed. Press Enter to close this window.'\n");
             sb.append("read _\n");

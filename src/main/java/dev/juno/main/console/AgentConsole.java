@@ -57,6 +57,9 @@ public final class AgentConsole {
         this.consoleKey = consoleKey == null ? ticket : consoleKey;
     }
 
+    /** Exit code when the ticket was deleted; the terminal window then closes without waiting for a key. */
+    static final int TICKET_DELETED = 3;
+
     public static void main(String[] args) throws Exception {
         int port = 0;
         String tokenFile = null;
@@ -116,6 +119,11 @@ public final class AgentConsole {
                 }
                 sleep(2000);
                 continue;
+            }
+            if (response.path("deleted").asBoolean(false)) {
+                out.println("[juno] " + response.path("error").asText("This ticket was deleted"));
+                out.flush();
+                System.exit(TICKET_DELETED); // the terminal script closes the window on this code
             }
             if (response.has("error")) {
                 out.println("[juno] " + response.get("error").asText());

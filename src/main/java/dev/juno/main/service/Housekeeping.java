@@ -6,7 +6,9 @@ import dev.juno.main.model.Ticket;
 import dev.juno.main.store.JunoStore;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -17,8 +19,8 @@ import java.util.stream.Stream;
 
 /**
  * Keeps Juno's folders tidy: frees branches after delivery, removes everything a deleted ticket left behind
- * (worktree, logs, run records, terminal scripts; never the branch), keeps only recent run records, and clears
- * files of tickets that no longer exist.
+ * (worktree, logs, run records, terminal scripts and Claude Code's session history of its agents; never the
+ * branch), keeps only recent run records, and clears files of tickets that no longer exist.
  */
 final class Housekeeping {
 
@@ -64,11 +66,17 @@ final class Housekeeping {
 
     /**
      * Removes what a deleted ticket left behind: its worktree (uncommitted changes included; the branch and its
-     * commits stay), its logs, run records and terminal scripts. Runs in the background.
+     * commits stay), its logs, run records, terminal scripts and Claude Code's session history of its agents.
+     * Runs in the background.
      */
     void deleteTicketFiles(Ticket ticket, Path repo) {
         String id = ticket.getId();
+        Path defaultWorktree = worktreesDir().resolve(BoardState.safeName(id));
         Thread.ofVirtual().name("cleanup-" + id).start(() -> {
+            deleteClaudeSessions(defaultWorktree);
+            if (ticket.getWorktreePath() != null) {
+                deleteClaudeSessions(Path.of(ticket.getWorktreePath()));
+            }
             if (ticket.getWorktreePath() != null && repo != null) {
                 Path worktree = Path.of(ticket.getWorktreePath());
                 GitWorkspace git = new GitWorkspace("git", state::addTrackerLog);
@@ -134,8 +142,9 @@ final class Housekeeping {
     }
 
     /**
-     * On start-up: removes logs, run records and terminal scripts of tickets that no longer exist, and worktrees
-     * of deleted tickets that have no uncommitted changes (they would block checking out their branch).
+     * On start-up: removes logs, run records, terminal scripts and Claude Code session history of tickets that no
+     * longer exist, and worktrees of deleted tickets that have no uncommitted changes (they would block checking
+     * out their branch).
      */
     void cleanUpOrphans() {
         Set<String> live = new HashSet<>();
@@ -152,9 +161,78 @@ final class Housekeeping {
             logs.filter(p -> !live.contains(p.getFileName().toString().replaceFirst("(\\.\\d+)?\\.log$", "")))
                     .forEach(store::deleteTree);
         }
-        try (Stream<Path> worktrees = list(store.home().resolve("worktrees"))) {
+        try (Stream<Path> worktrees = list(worktreesDir())) {
             worktrees.filter(p -> !live.contains(p.getFileName().toString())).forEach(this::removeOrphanWorktree);
         }
+        // Claude Code's own history of agents that worked in a deleted ticket's worktree.
+        Set<String> liveSessions = new HashSet<>();
+        live.forEach(name -> liveSessions.add(claudeProjectName(worktreesDir().resolve(name))));
+        String prefix = claudeProjectName(worktreesDir()) + "-";
+        try (Stream<Path> sessions = list(claudeProjectsDir())) {
+            sessions.filter(p -> {
+                String name = p.getFileName().toString();
+                return name.startsWith(prefix) && name.length() > prefix.length() && !liveSessions.contains(name);
+            }).forEach(Housekeeping::deleteSessionFolder);
+        }
+        // Terminal scripts of deleted tickets ("<id>[-variant].cmd", "open-<id>[-variant].cmd", ...).
+        try (Stream<Path> scripts = list(store.home().resolve("consoles"))) {
+            scripts.filter(p -> {
+                String name = p.getFileName().toString().replaceFirst("^open-", "");
+                return live.stream().noneMatch(name::startsWith);
+            }).forEach(store::deleteTree);
+        }
+    }
+
+    private Path worktreesDir() {
+        return state.store.home().resolve("worktrees");
+    }
+
+    // ---- Claude Code's session history ---------------------------------------------------------
+
+    /**
+     * Deletes the history Claude Code keeps for agents that ran in this worktree (their full transcripts, in
+     * {@code ~/.claude/projects/<worktree path>}). Only ever a folder belonging to one of Juno's worktrees.
+     */
+    void deleteClaudeSessions(Path worktree) {
+        Path absolute = worktree.toAbsolutePath().normalize();
+        if (!absolute.startsWith(worktreesDir().toAbsolutePath().normalize()) || absolute.equals(
+                worktreesDir().toAbsolutePath().normalize())) {
+            return;
+        }
+        deleteSessionFolder(claudeProjectsDir().resolve(claudeProjectName(absolute)));
+    }
+
+    /** Deletes one folder directly inside Claude Code's projects folder (and nothing else). */
+    private static void deleteSessionFolder(Path folder) {
+        Path projects = claudeProjectsDir().toAbsolutePath().normalize();
+        Path target = folder.toAbsolutePath().normalize();
+        if (!projects.equals(target.getParent()) || !Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS)) {
+            return;
+        }
+        try (Stream<Path> walk = Files.walk(target)) {
+            walk.sorted(Comparator.reverseOrder()).forEach(p -> {
+                try {
+                    Files.deleteIfExists(p);
+                } catch (IOException ignored) {
+                    // best effort
+                }
+            });
+        } catch (IOException | UncheckedIOException ignored) {
+            // best effort
+        }
+    }
+
+    /** Where Claude Code keeps per-folder session history: {@code $CLAUDE_CONFIG_DIR/projects} or ~/.claude/projects. */
+    static Path claudeProjectsDir() {
+        String configured = System.getenv("CLAUDE_CONFIG_DIR");
+        Path config = configured != null && !configured.isBlank() ? Path.of(configured)
+                : Path.of(System.getProperty("user.home"), ".claude");
+        return config.resolve("projects");
+    }
+
+    /** Claude Code's folder name for a working directory: every character other than a letter or digit becomes '-'. */
+    static String claudeProjectName(Path dir) {
+        return dir.toAbsolutePath().normalize().toString().replaceAll("[^A-Za-z0-9]", "-");
     }
 
     /** Removes a worktree no ticket owns, through its own repository, unless it has uncommitted changes. */

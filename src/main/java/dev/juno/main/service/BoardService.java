@@ -259,6 +259,9 @@ public final class BoardService implements AutoCloseable {
             state.board.getTickets().removeIf(t -> t.getId().equals(ticketId));
             state.persist();
         }
+        state.reviewStarts.remove(ticketId);
+        state.journals.remove(ticketId);
+        terminals.forget(ticketId);
         state.fireChanged();
         if (removed != null) {
             housekeeping.deleteTicketFiles(removed, repo);
