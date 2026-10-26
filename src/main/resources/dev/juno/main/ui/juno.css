@@ -122,17 +122,6 @@
     -fx-effect: dropshadow(gaussian, rgba(111, 214, 255, 0.5), 6, 0, 0, 0);
 }
 
-.status-bar {
-    -fx-background-color: -panel;
-    -fx-border-color: -line transparent transparent transparent;
-    -fx-border-width: 1 0 0 0;
-}
-
-.status-bar .label {
-    -fx-text-fill: -muted;
-    -fx-font-size: 12px;
-}
-
 /* ---- board ---- */
 
 .board-root,

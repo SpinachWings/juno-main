@@ -74,7 +74,6 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
     private final ComboBox<Organisation> organisation = new ComboBox<>();
     private final ComboBox<Item> project = new ComboBox<>();
     private final ComboBox<Item> agent = new ComboBox<>();
-    private final Label agentHint = new Label();
     private boolean loading;
     private final Map<TrackerKind, HBox> linkRows = new EnumMap<>(TrackerKind.class);
     private final VBox actionsBox = new VBox(8);
@@ -150,9 +149,6 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
             refreshSyncButtons();
         });
         agent.setMaxWidth(Double.MAX_VALUE);
-        agentHint.getStyleClass().add("hint");
-        agentHint.setText("A ticket agent overrides the project's, which overrides the organisation's.");
-        VBox agentBox = new VBox(2, agent, agentHint);
 
         GridPane form = new GridPane();
         form.setHgap(10);
@@ -165,7 +161,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         form.addRow(0, new Label("Title"), title);
         form.addRow(1, new Label("Organisation"), organisation);
         form.addRow(2, new Label("Project"), project);
-        form.addRow(3, new Label("Agent"), agentBox);
+        form.addRow(3, new Label("Agent"), agent);
 
         baseBranch.setPromptText("main");
         baseBranch.setPrefColumnCount(14);
@@ -302,11 +298,11 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
             boolean locked = ticket.isBranchLocked();
             baseBranch.setDisable(locked);
             branchName.setDisable(locked);
+            // Only shown once the branches are fixed, to explain why they can't be edited.
             branchHint.setText(locked
-                    ? "Fixed: work has started on this branch (worktree " + ticket.getWorktreePath() + ")."
-                    : "The agent works on a new branch created from the base branch; when it finishes, Juno "
-                            + "opens a pull request into the base branch. Leave the name blank to use the "
-                            + "suggestion.");
+                    ? "Fixed: work has started on this branch (worktree " + ticket.getWorktreePath() + ")." : "");
+            branchHint.setVisible(locked);
+            branchHint.setManaged(locked);
             List<Organisation> orgs = service.settings().getOrganisations();
             Organisation org = service.organisationOf(ticket).orElse(orgs.isEmpty() ? null : orgs.getFirst());
             organisation.setValue(org);

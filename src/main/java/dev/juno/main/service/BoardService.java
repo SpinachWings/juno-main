@@ -339,7 +339,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         synchronized (this) {
             t = require(ticketId);
             projectName = projectOf(t).map(Project::getName).orElse(null);
-            folder = Path.of(settings.getDesignDocFolder());
+            folder = settings.resolvedDesignDocFolder();
         }
         try {
             Path file = DesignDocs.export(t, projectName, folder);

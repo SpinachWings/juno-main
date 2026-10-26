@@ -90,7 +90,7 @@ previous file is kept as `settings.pre-single-host.json`.
    mode, allowed tools, max turns, and an optional API key or server URL. Leave the key blank to use your
    existing `claude` login.
 3. **Settings → General**: for each MCP server, its port and whether Juno starts the jar or connects to a
-   server you run (see above); the jar paths (filled in automatically when the repos sit side by side, and
+   server you run (see above); the jar paths (leave blank to use the servers next to juno-main, which are
    built automatically if missing); the Java runtime for them; and the overall limit on concurrent agents.
 4. Use **+ New ticket** or **Import**. Import asks for the organisation and project first, because
    their credentials are used. On a card, **Details** opens the ticket menu:
@@ -216,7 +216,7 @@ design conversation instead of code:
      approved design in the agent's prompt
    - reply with changes, and the agent revises it
    - **export** it as `.txt` (`/export` in the terminal, or from the dialog or Details)
-3. Exports go to the **design doc folder** (Settings → General) as `<TICKET>-<title>-design.txt`.
+3. Exports go to the **design doc folder** (Settings → General; blank means `Documents/Juno/design-docs`) as `<title>-design.txt`.
 
 To use your own design doc instead, paste it into the Design doc box in Details. It is used as-is.
 

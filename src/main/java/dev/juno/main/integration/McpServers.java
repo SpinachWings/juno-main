@@ -67,7 +67,7 @@ public final class McpServers implements AutoCloseable {
         McpLaunch launch = s.mcpLaunch(kind);
         Launched own = launched.get(kind);
         if (own != null && (!own.process().isAlive() || own.port() != port || launch != McpLaunch.JAR
-                || !own.jar().equals(s.mcpJar(kind)))) {
+                || !own.jar().equals(s.resolvedMcpJar(kind)))) {
             stop(kind);
         }
         switch (probe(port, artifact)) {
@@ -90,11 +90,7 @@ public final class McpServers implements AutoCloseable {
     }
 
     private void start(JunoSettings s, TrackerKind kind, int port, String artifact) throws McpException {
-        String jar = s.mcpJar(kind);
-        if (jar == null || jar.isBlank()) {
-            throw new McpException("No jar is set for the " + kind.displayName() + " MCP server (" + artifact
-                    + ".jar). Set it in Settings → General, or choose 'Already running on localhost'.");
-        }
+        String jar = s.resolvedMcpJar(kind);
         Path jarPath = Path.of(jar.trim());
         if (!Files.isRegularFile(jarPath)) {
             McpJars.build(jarPath, artifact);
@@ -146,7 +142,7 @@ public final class McpServers implements AutoCloseable {
         for (TrackerKind kind : TrackerKind.values()) {
             Launched own = launched.get(kind);
             if (own != null && (own.port() != s.mcpPort(kind) || s.mcpLaunch(kind) != McpLaunch.JAR
-                    || !own.jar().equals(s.mcpJar(kind)))) {
+                    || !own.jar().equals(s.resolvedMcpJar(kind)))) {
                 stop(kind);
             }
         }

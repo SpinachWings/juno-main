@@ -205,8 +205,12 @@ final class SettingsDialog extends Dialog<JunoSettings> {
             } else if (!ports.add(port)) {
                 problems.add("The GitHub and GitLab MCP servers need different ports.");
             }
-            if (mcpLaunch.get(kind).getValue() == McpLaunch.JAR && mcpJar.get(kind).getText().isBlank()) {
-                problems.add("Set the " + kind.displayName() + " MCP jar, or choose 'Already running on localhost'.");
+            if (mcpLaunch.get(kind).getValue() == McpLaunch.JAR && mcpJar.get(kind).getText().isBlank()
+                    && !java.nio.file.Files.isDirectory(java.nio.file.Path.of(JunoSettings.defaultJar(
+                    kind == TrackerKind.GITLAB ? "juno-gitlab-mcp" : "juno-github-mcp"))
+                    .getParent().getParent())) {
+                problems.add("The " + kind.displayName() + " MCP server wasn't found next to juno-main. Set its "
+                        + "jar, or choose 'Already running on localhost'.");
             }
         }
         java.util.regex.Pattern githubRepo = java.util.regex.Pattern.compile("[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+");
@@ -824,6 +828,7 @@ final class SettingsDialog extends Dialog<JunoSettings> {
             port.setTextFormatter(new javafx.scene.control.TextFormatter<String>(
                     change -> change.getControlNewText().matches("\\d{0,5}") ? change : null));
             TextField jar = new TextField(working.mcpJar(kind));
+            jar.setPromptText("Blank = found next to juno-main automatically");
             Button browse = fileBrowse(jar, kind.displayName() + " MCP server jar");
             jar.disableProperty().bind(launch.valueProperty().isEqualTo(McpLaunch.PORT));
             browse.disableProperty().bind(launch.valueProperty().isEqualTo(McpLaunch.PORT));
@@ -863,6 +868,7 @@ final class SettingsDialog extends Dialog<JunoSettings> {
 
         grid.add(sectionTitle("Design docs"), 0, row++, 2, 1);
         designDocFolder.setText(working.getDesignDocFolder());
+        designDocFolder.setPromptText("Blank = Documents/Juno/design-docs in your home folder");
         Button browseDocs = new Button("Browse…");
         browseDocs.setOnAction(e -> {
             DirectoryChooser chooser = new DirectoryChooser();

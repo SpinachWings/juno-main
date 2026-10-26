@@ -88,6 +88,15 @@ class PullRequestTargetTest {
         assertEquals(dev.juno.main.model.McpLaunch.JAR, s.mcpLaunch(TrackerKind.GITHUB));
         assertEquals("http://127.0.0.1:9951/mcp",
                 dev.juno.main.integration.McpServers.endpoint(s, TrackerKind.GITLAB).toString());
+        // Nothing machine-specific is stored by default: blank jars and design doc folder resolve at run time.
+        assertEquals("", s.mcpJar(TrackerKind.GITHUB));
+        assertEquals("", s.getDesignDocFolder());
+        assertTrue(s.resolvedMcpJar(TrackerKind.GITHUB).endsWith("juno-github-mcp.jar"));
+        s.setMcpJar(TrackerKind.GITLAB, JunoSettings.defaultJar("juno-gitlab-mcp"));
+        s.setDesignDocFolder(JunoSettings.defaultDesignDocFolder());
+        assertTrue(s.clearAutomaticDefaults());
+        assertEquals("", s.mcpJar(TrackerKind.GITLAB));
+        assertEquals("", s.getDesignDocFolder());
     }
 
     private interface Call {

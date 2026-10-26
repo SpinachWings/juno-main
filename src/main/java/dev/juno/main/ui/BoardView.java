@@ -54,7 +54,6 @@ public final class BoardView {
     private final ComboBox<FilterItem> orgFilter = new ComboBox<>();
     private final ComboBox<FilterItem> projectFilter = new ComboBox<>();
     private final Label agentsLabel = new Label();
-    private final Label statusLabel = new Label("Ready");
     private boolean updatingFilter;
 
     public BoardView(BoardService service, HostServices hostServices) {
@@ -63,7 +62,6 @@ public final class BoardView {
         root.getStyleClass().add("board-root");
         root.setTop(buildToolbar());
         root.setCenter(buildColumns());
-        root.setBottom(buildStatusBar());
         service.addChangeListener(() -> Fx.runLater(this::refresh));
         refresh();
     }
@@ -154,13 +152,6 @@ public final class BoardView {
         outer.setFitToWidth(true);
         outer.getStyleClass().add("board-scroll");
         return outer;
-    }
-
-    private Node buildStatusBar() {
-        HBox bar = new HBox(statusLabel);
-        bar.getStyleClass().add("status-bar");
-        bar.setPadding(new Insets(4, 12, 4, 12));
-        return bar;
     }
 
     // ---- refresh ----------------------------------------------------------------------------
@@ -287,49 +278,33 @@ public final class BoardView {
         return t.getTitle() == null || t.getTitle().isBlank() ? "the ticket" : "'" + t.getTitle().strip() + "'";
     }
 
-    private void status(String message) {
-        statusLabel.setText(message);
-    }
-
     private void newTicket() {
         Ticket ticket = service.createTicket("", "", defaultProjectId());
         new TicketDetailsDialog(window(), service, ticket, true, hostServices).showAndWait();
-        status(service.ticket(ticket.getId()).map(t -> "Saved " + name(t)).orElse("Discarded new ticket"));
     }
 
     private void importAsNewTicket(TrackerKind kind) {
         new IssuePickerDialog(window(), service, kind, selectedOrgId(), defaultProjectId(), null, null)
                 .showAndWait().ifPresent(sel -> {
-            status("Importing " + kind.displayName() + " " + sel.location() + "#" + sel.number() + "…");
             Fx.async(() -> service.importAsNewTicket(sel.projectId(), kind, sel.location(), sel.number()),
-                    t -> status("Imported " + kind.displayName() + " issue as " + name(t)),
-                    err -> {
-                        status("Import failed");
-                        Fx.error(window(), "Import failed", err);
-                    });
+                    t -> { },
+                    err -> Fx.error(window(), "Import failed", err));
         });
     }
 
     private void openSettings() {
         JunoSettings working = service.store().copy(service.settings(), JunoSettings.class);
-        new SettingsDialog(window(), service, working).showAndWait().ifPresent(updated -> {
-            service.updateSettings(updated);
-            status("Settings saved");
-        });
+        new SettingsDialog(window(), service, working).showAndWait().ifPresent(service::updateSettings);
     }
 
     private TicketCard.Actions cardActions() {
         return new TicketCard.Actions() {
             @Override
             public void start(Ticket t, Window owner) {
-                status("Starting agent for " + name(t) + "…");
                 Fx.async(() -> {
                     service.startWork(t.getId());
                     return null;
-                }, ok -> status("Agent started on " + name(t)), err -> {
-                    status("Could not start " + name(t));
-                    Fx.error(owner, "Could not start " + name(t), err);
-                });
+                }, ok -> { }, err -> Fx.error(owner, "Could not start " + name(t), err));
             }
 
             @Override
@@ -339,7 +314,6 @@ public final class BoardView {
                         + " working on " + name(t) + "? The ticket goes back to " + (review ? "AI review" : "Pending")
                         + "; commits and changes already made stay on its branch.")) {
                     service.stopWork(t.getId());
-                    status("Stopping agent on " + name(t));
                 }
             }
 
@@ -365,14 +339,14 @@ public final class BoardView {
                         Fx.async(() -> {
                             service.approveDesign(t.getId());
                             return null;
-                        }, ok -> status("Design approved; implementation started on " + name(t)),
+                        }, ok -> { },
                                 err -> Fx.error(owner, "Could not start " + name(t), err));
                         return;
                     }
                     Fx.async(() -> {
                         service.respond(t.getId(), decision.answer());
                         return null;
-                    }, ok -> status("Resumed agent on " + name(t)),
+                    }, ok -> { },
                             err -> Fx.error(owner, "Could not resume " + name(t), err));
                 });
             }
@@ -381,7 +355,6 @@ public final class BoardView {
             public void move(Ticket t, TicketStatus target, Window owner) {
                 try {
                     service.move(t.getId(), target);
-                    status("Moved " + name(t) + " to " + target.label());
                 } catch (Exception e) {
                     Fx.error(owner, "Cannot move " + name(t), e);
                 }
@@ -389,46 +362,32 @@ public final class BoardView {
 
             @Override
             public void retryPullRequest(Ticket t, Window owner) {
-                status("Retrying " + name(t) + "…");
                 Fx.async(() -> {
                     service.deliver(t.getId());
                     return null;
-                }, ok -> status(t.getPullRequestError() == null
-                        ? name(t) + " delivered" + (t.getPullRequest() == null ? "" : ": " + t.getPullRequest().display())
-                        : name(t) + " still failing; see the card"),
+                }, ok -> { },
                         err -> Fx.error(owner, "Retry failed", err));
             }
 
             @Override
             public void terminal(Ticket t, Window owner) {
-                Fx.async(() -> service.showTerminal(t.getId()), BoardView.this::status,
+                Fx.async(() -> service.showTerminal(t.getId()), message -> { },
                         err -> Fx.error(owner, "Could not open the terminal", err));
             }
 
             @Override
             public void startReview(Ticket t, Window owner) {
-                status("Reading review comments for " + name(t) + "…");
                 Fx.async(() -> service.startReview(t.getId()),
-                        count -> status(count == 0
-                                ? "No new comments on " + name(t) + "'s pull request; AI review "
-                                        + t.getReviewCount() + " completed immediately"
-                                : "AI review started on " + name(t) + " with " + count + " comment(s)"),
-                        err -> {
-                            status("AI review not started");
-                            Fx.error(owner, "Could not start the AI review", err);
-                        });
+                        count -> { },
+                        err -> Fx.error(owner, "Could not start the AI review", err));
             }
 
             @Override
             public void resume(Ticket t, Window owner) {
-                status("Resuming " + name(t) + "…");
                 Fx.async(() -> {
                     service.resumeInterrupted(t.getId());
                     return null;
-                }, ok -> status("Resumed " + name(t)), err -> {
-                    status("Could not resume " + name(t));
-                    Fx.error(owner, "Could not resume " + name(t), err);
-                });
+                }, ok -> { }, err -> Fx.error(owner, "Could not resume " + name(t), err));
             }
 
             @Override
@@ -454,7 +413,6 @@ public final class BoardView {
                 if (Fx.confirm(owner, "Delete " + name(t) + "?",
                         "This removes the ticket from Juno only; linked GitLab/GitHub issues are not touched.")) {
                     service.deleteTicket(t.getId());
-                    status("Deleted " + name(t));
                 }
             }
         };

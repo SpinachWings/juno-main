@@ -109,6 +109,9 @@ public final class JunoStore {
             settings = read(file, JunoSettings.class, JunoSettings::createDefault);
         }
         List<String> notes = settings.normalise();
+        if (settings.clearAutomaticDefaults() && notes.isEmpty()) {
+            saveSettings(settings);
+        }
         if (!notes.isEmpty()) {
             try {
                 Files.copy(file, file.resolveSibling("settings.pre-single-host.json"), StandardCopyOption.REPLACE_EXISTING);

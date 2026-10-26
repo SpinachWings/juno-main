@@ -23,8 +23,9 @@ public final class JunoSettings {
      * The MCP servers listen on localhost ports and hold no credentials (Juno sends each organisation's token
      * with every call). Juno either starts their jars on those ports or connects to servers already running.
      */
-    private String gitlabMcpJar = defaultJar("juno-gitlab-mcp");
-    private String githubMcpJar = defaultJar("juno-github-mcp");
+    /** Blank = found automatically next to juno-main (see {@link #resolvedMcpJar}); never stored. */
+    private String gitlabMcpJar = "";
+    private String githubMcpJar = "";
     private McpLaunch gitlabMcpLaunch = McpLaunch.JAR;
     private McpLaunch githubMcpLaunch = McpLaunch.JAR;
     public static final int DEFAULT_GITHUB_MCP_PORT = 9950;
@@ -47,7 +48,8 @@ public final class JunoSettings {
     /** Bundled packs already added once; a pack the user removed is not added again. */
     private List<String> bundledSkillsOffered = new ArrayList<>();
     /** Where exported design docs (.txt) are written. */
-    private String designDocFolder = defaultDesignDocFolder();
+    /** Blank = Documents/Juno/design-docs in your home folder (see {@link #resolvedDesignDocFolder}). */
+    private String designDocFolder = "";
 
     /** Settings for a fresh install: one organisation with one agent profile assigned to it. */
     public static JunoSettings createDefault() {
@@ -108,8 +110,37 @@ public final class JunoSettings {
         return agentProfiles;
     }
 
+    /** The jar as configured; blank means "find it automatically". */
     public String mcpJar(TrackerKind kind) {
-        return kind == TrackerKind.GITLAB ? gitlabMcpJar : githubMcpJar;
+        String jar = kind == TrackerKind.GITLAB ? gitlabMcpJar : githubMcpJar;
+        return jar == null ? "" : jar;
+    }
+
+    /** The jar to start: the configured one, else the server project found next to juno-main. */
+    public String resolvedMcpJar(TrackerKind kind) {
+        String jar = mcpJar(kind).strip();
+        return jar.isEmpty() ? defaultJar(kind == TrackerKind.GITLAB ? "juno-gitlab-mcp" : "juno-github-mcp") : jar;
+    }
+
+    /**
+     * Blanks stored values that are just the automatic defaults (machine-specific paths written by earlier
+     * versions), so settings only hold what you chose. Returns true if anything changed.
+     */
+    public boolean clearAutomaticDefaults() {
+        boolean changed = false;
+        if (!gitlabMcpJar.isBlank() && gitlabMcpJar.equals(defaultJar("juno-gitlab-mcp"))) {
+            gitlabMcpJar = "";
+            changed = true;
+        }
+        if (!githubMcpJar.isBlank() && githubMcpJar.equals(defaultJar("juno-github-mcp"))) {
+            githubMcpJar = "";
+            changed = true;
+        }
+        if (designDocFolder != null && !designDocFolder.isBlank() && designDocFolder.equals(defaultDesignDocFolder())) {
+            designDocFolder = "";
+            changed = true;
+        }
+        return changed;
     }
 
     public void setMcpJar(TrackerKind kind, String jar) {
@@ -177,8 +208,15 @@ public final class JunoSettings {
         return bundledSkillsOffered;
     }
 
+    /** The folder as configured; blank means the default. */
     public String getDesignDocFolder() {
-        return designDocFolder == null || designDocFolder.isBlank() ? defaultDesignDocFolder() : designDocFolder;
+        return designDocFolder == null ? "" : designDocFolder;
+    }
+
+    /** Where design docs are exported: the configured folder, else Documents/Juno/design-docs. */
+    public Path resolvedDesignDocFolder() {
+        String folder = getDesignDocFolder().strip();
+        return folder.isEmpty() ? Path.of(defaultDesignDocFolder()) : Path.of(folder);
     }
 
     public void setDesignDocFolder(String designDocFolder) {
@@ -190,7 +228,7 @@ public final class JunoSettings {
         return getSkills().stream().filter(SkillEntry::isEnabled).filter(e -> e.appliesTo(project)).toList();
     }
 
-    private static String defaultDesignDocFolder() {
+    public static String defaultDesignDocFolder() {
         Path home = Path.of(System.getProperty("user.home"));
         Path documents = home.resolve("Documents");
         return (Files.isDirectory(documents) ? documents.resolve("Juno") : home.resolve("Juno"))
@@ -279,7 +317,7 @@ public final class JunoSettings {
      * Default jar location assuming the three repos sit side by side, e.g.
      * {@code juno/juno-main} (working dir) and {@code juno/juno-gitlab-mcp/target/juno-gitlab-mcp.jar}.
      */
-    private static String defaultJar(String artifact) {
+    public static String defaultJar(String artifact) {
         Path cwd = Path.of(System.getProperty("user.dir")).toAbsolutePath();
         for (Path base = cwd; base != null; base = base.getParent()) {
             if (Files.isDirectory(base.resolve(artifact))) {
