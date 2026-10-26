@@ -357,3 +357,7 @@ the font files in `ui/fonts/`:
 
 The palette is defined once at the top of the stylesheet.
 
+
+## Licence
+
+MIT; see [LICENSE](LICENSE).
