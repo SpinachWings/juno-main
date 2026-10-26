@@ -156,13 +156,16 @@ Tips:
 
 ### Agent terminals
 
-When an agent starts, Juno opens a terminal window titled `Juno - <ticket title>` with a live agent console:
+When an agent starts, Juno opens a terminal window titled `Juno - <ticket title> [<ticket id>]` with a live
+agent console:
 - it streams everything the agent does (the same as **Log**, including history)
 - when the agent asks for a decision, it shows the question and lets you type the answer. Finish with an
   empty line.
 
 You can answer either there or on the board; whichever comes first wins and the other updates itself. The
-**Terminal** button on a card brings that window to the front, or opens a fresh console if you closed it.
+**Terminal** button on a card brings the ticket's open terminal to the front (restoring it if minimised); it
+only opens a new console if none is open, so a ticket never gets a duplicate window. Juno finds the window by
+the `[<ticket id>]` tag in its title, which stays the same when you rename the ticket.
 
 How it works:
 - Agents still run headless under Juno's control. That is what lets both the board and the terminal answer

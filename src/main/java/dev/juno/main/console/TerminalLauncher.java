@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
@@ -79,35 +80,44 @@ final class TerminalLauncher {
         }
     }
 
-    /** Tries to bring the window with this title to the front. Returns true if it (probably) worked. */
-    boolean focus(String title) {
+    /**
+     * Brings the window whose title contains {@code tag} to the front (restoring it if minimised).
+     *
+     * @return true if such a window was found
+     */
+    boolean focus(String tag) {
         List<String> command = switch (os) {
-            case WINDOWS -> List.of("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
-                    "$w = New-Object -ComObject WScript.Shell; if ($w.AppActivate('" + title.replace("'", "''")
-                            + "')) { exit 0 } else { exit 1 }");
+            case WINDOWS -> List.of("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                    "-EncodedCommand", Base64.getEncoder().encodeToString(
+                            WINDOWS_FOCUS.getBytes(StandardCharsets.UTF_16LE)));
             case MAC -> List.of("osascript", "-e", """
                     tell application "Terminal"
                       repeat with w in windows
                         if name of w contains "%s" then
                           activate
+                          set miniaturized of w to false
                           set index of w to 1
                           return "ok"
                         end if
                       end repeat
                     end tell
                     error "not found"
-                    """.formatted(title.replace("\"", "")));
-            case LINUX -> onPath("wmctrl") ? List.of("wmctrl", "-a", title)
-                    : onPath("xdotool") ? List.of("xdotool", "search", "--name", title, "windowactivate")
+                    """.formatted(tag.replace("\"", "")));
+            case LINUX -> onPath("wmctrl") ? List.of("wmctrl", "-a", tag)
+                    : onPath("xdotool") ? List.of("xdotool", "search", "--name",
+                            tag.replaceAll("([\\\\\\[\\](){}.*+?^$|])", "\\\\$1"), "windowactivate")
                     : List.of();
         };
         if (command.isEmpty()) {
             return false;
         }
         try {
-            Process p = new ProcessBuilder(command).redirectErrorStream(true).start();
+            ProcessBuilder pb = new ProcessBuilder(command).redirectErrorStream(true);
+            pb.environment().put("JUNO_WINDOW_TAG", tag);
+            Process p = pb.start();
+            p.getOutputStream().close();
             p.getInputStream().readAllBytes();
-            return p.waitFor(10, TimeUnit.SECONDS) && p.exitValue() == 0;
+            return p.waitFor(20, TimeUnit.SECONDS) && p.exitValue() == 0;
         } catch (IOException e) {
             return false;
         } catch (InterruptedException e) {
@@ -115,6 +125,51 @@ final class TerminalLauncher {
             return false;
         }
     }
+
+    /**
+     * Finds the visible window whose title contains {@code $env:JUNO_WINDOW_TAG} (Windows Terminal or a classic
+     * console; cmd adds the running command to the title, so it's matched by "contains"), restores it if
+     * minimised and brings it to the front. Exits 0 if found, 1 if not.
+     */
+    private static final String WINDOWS_FOCUS = """
+            $ErrorActionPreference = 'Stop'
+            Add-Type -TypeDefinition @'
+            using System;
+            using System.Runtime.InteropServices;
+            using System.Text;
+            public static class JunoWindows {
+                private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+                [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+                [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int max);
+                [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
+                [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr hWnd);
+                [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int command);
+                [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
+                [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+                public static int Focus(string tag) {
+                    IntPtr found = IntPtr.Zero;
+                    EnumWindows(delegate (IntPtr h, IntPtr p) {
+                        if (!IsWindowVisible(h)) { return true; }
+                        StringBuilder text = new StringBuilder(1024);
+                        GetWindowText(h, text, text.Capacity);
+                        if (text.ToString().IndexOf(tag, StringComparison.OrdinalIgnoreCase) >= 0) { found = h; return false; }
+                        return true;
+                    }, IntPtr.Zero);
+                    if (found == IntPtr.Zero) { return 1; }
+                    if (IsIconic(found)) { ShowWindow(found, 9); }
+                    SetForegroundWindow(found);
+                    if (GetForegroundWindow() != found) {
+                        // Windows may refuse to switch focus; minimising and restoring brings the window up anyway.
+                        ShowWindow(found, 6);
+                        ShowWindow(found, 9);
+                        SetForegroundWindow(found);
+                    }
+                    return 0;
+                }
+            }
+            '@
+            exit ([JunoWindows]::Focus($env:JUNO_WINDOW_TAG))
+            """;
 
     // ---- scripts ----------------------------------------------------------------------------
 

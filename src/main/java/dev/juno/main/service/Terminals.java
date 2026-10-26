@@ -3,7 +3,6 @@ package dev.juno.main.service;
 import dev.juno.main.console.AgentConsoles;
 import dev.juno.main.model.JunoSettings;
 import dev.juno.main.model.RunKind;
-import dev.juno.main.model.Ticket;
 
 import java.io.IOException;
 
@@ -36,8 +35,8 @@ final class Terminals {
     }
 
     /**
-     * Brings the terminal for the ticket's current (or last) run to the front, opening one if it isn't running.
-     * Work runs and AI review runs have separate terminals.
+     * Brings the ticket's open terminal to the front (the one for its current or last run if several are open),
+     * opening one only if none is.
      */
     public String showTerminal(String ticketId) throws JunoException {
         if (consoles == null) {
@@ -50,16 +49,13 @@ final class Terminals {
         try {
             return consoles.show(ticketId, consoleVariant(kind), state.settings.getTerminalCommand());
         } catch (IOException e) {
-            throw new JunoException("Could not open a terminal: " + e.getMessage(), e);
+            throw new JunoException(e.getMessage(), e);
         }
     }
 
+    /** Whether any of the ticket's terminals is open. */
     public boolean isTerminalOpen(String ticketId) {
-        RunKind kind;
-        synchronized (state) {
-            kind = state.find(ticketId).map(Ticket::getRunKind).orElse(RunKind.WORK);
-        }
-        return consoles != null && consoles.isOpen(AgentConsoles.key(ticketId, consoleVariant(kind)));
+        return consoles != null && consoles.isAnyOpen(ticketId);
     }
 
     /** A deleted ticket's terminals close themselves; this forgets them. */

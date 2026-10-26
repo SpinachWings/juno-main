@@ -113,19 +113,36 @@ public final class AgentConsoles implements AutoCloseable {
         return variant == null || variant.isBlank() ? ticketId : ticketId + "-" + variant;
     }
 
-    /** Terminal window title: the ticket's title (plain characters only, so every shell accepts it). */
-    public static String windowTitle(String ticketTitle, String variant) {
+    /** Every console variant a ticket can have: its work runs, AI reviews and conflict resolutions. */
+    static final List<String> VARIANTS = List.of("", "review", "conflicts");
+
+    /**
+     * Terminal window title: the ticket's title (plain characters only, so every shell accepts it), then a tag
+     * that identifies the console (see {@link #windowTag}).
+     */
+    public static String windowTitle(String ticketTitle, String ticketId, String variant) {
         String name = ticketTitle == null ? "" : ticketTitle.replaceAll("[^\\p{L}\\p{N} .,_()-]", "")
                 .replaceAll("\\s+", " ").strip();
         if (name.length() > 50) {
             name = name.substring(0, 50).strip();
         }
         return "Juno - " + (name.isEmpty() ? "ticket" : name) + ("review".equals(variant) ? " (AI review)"
-                : "conflicts".equals(variant) ? " (resolving conflicts)" : "");
+                : "conflicts".equals(variant) ? " (resolving conflicts)" : "") + " " + windowTag(ticketId, variant);
+    }
+
+    /**
+     * The part of a console's window title that identifies it, e.g. {@code [ac3ff154]} or
+     * {@code [ac3ff154 review]}. Unlike the ticket's title it never changes and is unique, so Juno finds the
+     * window by it.
+     */
+    static String windowTag(String ticketId, String variant) {
+        String id = safe(ticketId);
+        return "[" + id.substring(0, Math.min(8, id.length()))
+                + (variant == null || variant.isBlank() ? "" : " " + variant) + "]";
     }
 
     private String windowTitleFor(String ticketId, String variant) {
-        return windowTitle(backend.state(ticketId).map(TicketState::title).orElse(""), variant);
+        return windowTitle(backend.state(ticketId).map(TicketState::title).orElse(""), ticketId, variant);
     }
 
     /**
@@ -151,6 +168,11 @@ public final class AgentConsoles implements AutoCloseable {
         return true;
     }
 
+    /** Whether any of the ticket's consoles is open. */
+    public boolean isAnyOpen(String ticketId) {
+        return VARIANTS.stream().anyMatch(v -> isOpen(key(ticketId, v)));
+    }
+
     /** Opens a console for the ticket's run unless one is already open. */
     public void ensureOpen(String ticketId, String variant, String terminalCommand) throws IOException {
         if (!isOpen(key(ticketId, variant))) {
@@ -159,18 +181,35 @@ public final class AgentConsoles implements AutoCloseable {
     }
 
     /**
-     * Brings the console to the front, opening a new one if none is running.
+     * Brings the ticket's open console to the front, preferring the one for {@code variant} (any of the
+     * ticket's consoles shows its whole log). Only when none is open is a new one opened.
      *
-     * @return a short description of what happened, for the status bar
+     * @return a short description of what happened
+     * @throws IOException if a console is open but its window can't be found, or a new one can't be opened
      */
     public String show(String ticketId, String variant, String terminalCommand) throws IOException {
-        String title = windowTitleFor(ticketId, variant);
-        if (isOpen(key(ticketId, variant)) && launcher.focus(title)) {
-            return "Switched to '" + title + "'";
+        List<String> order = new ArrayList<>();
+        order.add(variant == null ? "" : variant);
+        VARIANTS.stream().filter(v -> !order.contains(v)).forEach(order::add);
+        String openTitle = null;
+        for (String v : order) {
+            if (isOpen(key(ticketId, v))) {
+                String title = windowTitleFor(ticketId, v);
+                if (launcher.focus(windowTag(ticketId, v))) {
+                    return "Switched to '" + title + "'";
+                }
+                if (openTitle == null) {
+                    openTitle = title;
+                }
+            }
         }
-        // Closed (or its window can't be found to bring forward): open a fresh one. It replays the log.
+        if (openTitle != null) {
+            // Never open a second console for a ticket: point to the one that is open.
+            throw new IOException("This ticket's terminal is already open, but Juno couldn't bring it to the front. "
+                    + "Look for '" + openTitle + "' in the taskbar.");
+        }
         open(ticketId, variant, terminalCommand);
-        return "Opened '" + title + "'";
+        return "Opened '" + windowTitleFor(ticketId, variant) + "'";
     }
 
     private void open(String ticketId, String variant, String terminalCommand) throws IOException {
