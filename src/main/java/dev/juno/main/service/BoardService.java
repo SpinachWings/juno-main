@@ -1213,11 +1213,13 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         }
         log(ticketId, "[juno] " + kind.pullRequestNoun() + " " + pr.display() + ": " + pr.url());
         log(ticketId, "[juno] moved to Review");
+        releaseBranch(ticketId, Path.of(project.getPath()), worktree, branch);
     }
 
     private void pushReview(String ticketId) throws JunoException, GitException, McpException {
         Ticket t;
         Organisation org;
+        Path repo;
         PullRequestRef pr;
         Path worktree;
         String branch;
@@ -1227,6 +1229,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
             pr = t.getPullRequest();
             Project project = settings.project(t.getProjectId()).orElse(null);
             org = project == null ? null : settings.organisationOf(project).orElse(null);
+            repo = project == null ? null : Path.of(project.getPath());
             worktree = Path.of(t.getWorktreePath());
             branch = t.getBranchName();
             summary = t.getLastReviewSummary() == null || t.getLastReviewSummary().isBlank()
@@ -1271,6 +1274,20 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
             persist();
         }
         log(ticketId, "[juno] AI review " + t.getReviewCount() + " complete, moved back to Review");
+        if (repo != null) {
+            releaseBranch(ticketId, repo, worktree, branch);
+        }
+    }
+
+    /**
+     * After a run is delivered (pushed, PR opened or review posted), removes the ticket's worktree so its branch
+     * can be checked out in your own folder. The next run (AI review, or Start after moving it back) recreates
+     * it from the branch. A worktree with uncommitted changes is kept.
+     */
+    private void releaseBranch(String ticketId, Path repo, Path worktree, String branch) {
+        if (git(ticketId).release(repo, worktree)) {
+            log(ticketId, "[juno] released branch " + branch + ": you can check it out in your own folder now");
+        }
     }
 
     /**

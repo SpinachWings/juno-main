@@ -62,6 +62,34 @@ class GitWorkspaceTest {
         // The user's own checkout stays on main and clean.
         assertEquals("main", git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip());
         assertTrue(git(repo, "status", "--porcelain").isBlank());
+
+        // Uncommitted changes keep the worktree.
+        Files.writeString(worktree.resolve("c.txt"), "c");
+        assertFalse(ws.release(repo, worktree));
+        Files.delete(worktree.resolve("c.txt"));
+
+        // Once delivered, the worktree is released and the branch can be checked out in the user's folder.
+        Files.createDirectories(worktree.resolve(".claude/skills/juno-x"));
+        ws.exclude(worktree, "/.claude/skills/juno-*/");
+        Files.writeString(worktree.resolve(".claude/skills/juno-x/SKILL.md"), "skill");
+        assertTrue(ws.release(repo, worktree));
+        assertFalse(Files.exists(worktree));
+        git(repo, "checkout", "-q", "juno/juno-1-test");
+        assertTrue(Files.exists(repo.resolve("b.txt")));
+
+        // While the user has it checked out, the next run explains instead of failing obscurely.
+        try {
+            ws.prepare(repo, worktree, "main", "juno/juno-1-test");
+            throw new AssertionError("expected a clear error");
+        } catch (GitException e) {
+            assertTrue(e.getMessage().contains("is checked out in"), e.getMessage());
+        }
+
+        // Back on main, the next run recreates the worktree from the existing branch, keeping its base.
+        git(repo, "checkout", "-q", "main");
+        GitWorkspace.Prepared again = ws.prepare(repo, worktree, "main", "juno/juno-1-test");
+        assertEquals(null, again.baseRef());
+        assertTrue(Files.exists(worktree.resolve("b.txt")));
     }
 
     @Test

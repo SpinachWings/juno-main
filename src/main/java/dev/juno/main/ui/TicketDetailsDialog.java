@@ -300,7 +300,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
             branchName.setDisable(locked);
             // Only shown once the branches are fixed, to explain why they can't be edited.
             branchHint.setText(locked
-                    ? "Fixed: work has started on this branch (worktree " + ticket.getWorktreePath() + ")." : "");
+                    ? "Fixed: work has started on this branch." : "");
             branchHint.setVisible(locked);
             branchHint.setManaged(locked);
             List<Organisation> orgs = service.settings().getOrganisations();

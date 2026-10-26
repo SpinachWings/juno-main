@@ -111,7 +111,14 @@ public final class GitWorkspace {
             throw new GitException("Could not create " + worktree.getParent() + ": " + e.getMessage());
         }
         Result add;
-        if (verify(repo, "refs/heads/" + branch)) {
+        boolean existing = verify(repo, "refs/heads/" + branch);
+        if (existing) {
+            String elsewhere = checkedOutAt(repo, branch);
+            if (elsewhere != null) {
+                throw new GitException("Branch '" + branch + "' is checked out in " + elsewhere + ". Git allows a "
+                        + "branch in one place at a time: switch that folder to another branch (for example "
+                        + "'git checkout " + baseBranch + "'), then try again.");
+            }
             log.accept("[git] branch " + branch + " already exists; checking it out");
             add = run(repo, LOCAL_TIMEOUT, true, "worktree", "add", worktree.toString(), branch);
         } else {
@@ -121,7 +128,51 @@ public final class GitWorkspace {
         if (!add.ok()) {
             throw new GitException("Could not create a worktree for '" + branch + "': " + add.output().strip());
         }
-        return new Prepared(worktree, baseRef, false);
+        // An existing branch keeps the base commit recorded when it was first created.
+        return new Prepared(worktree, existing ? null : baseRef, false);
+    }
+
+    /** The folder where {@code branch} is checked out (main checkout or another worktree), or null. */
+    String checkedOutAt(Path repo, String branch) {
+        Result list = run(repo, LOCAL_TIMEOUT, false, "worktree", "list", "--porcelain");
+        if (!list.ok()) {
+            return null;
+        }
+        String path = null;
+        for (String line : list.output().lines().toList()) {
+            if (line.startsWith("worktree ")) {
+                path = line.substring("worktree ".length()).strip();
+            } else if (line.strip().equals("branch refs/heads/" + branch)) {
+                return path;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Removes the ticket's worktree once its work is committed and pushed, so its branch is free to check out
+     * anywhere else (the branch itself is kept; the next run recreates the worktree). Does nothing and returns
+     * false if the worktree still has uncommitted changes or can't be removed (e.g. a file is open).
+     */
+    public boolean release(Path repo, Path worktree) {
+        if (!Files.isDirectory(worktree)) {
+            run(repo, LOCAL_TIMEOUT, false, "worktree", "prune");
+            return true;
+        }
+        Result status = run(worktree, LOCAL_TIMEOUT, false, "status", "--porcelain");
+        if (!status.ok() || !status.output().isBlank()) {
+            log.accept("[git] kept the worktree " + worktree + ": it has uncommitted changes");
+            return false;
+        }
+        // --force only covers files git ignores (e.g. Juno's skills folder); there are no other changes.
+        Result remove = run(repo, LOCAL_TIMEOUT, false, "worktree", "remove", "--force", worktree.toString());
+        run(repo, LOCAL_TIMEOUT, false, "worktree", "prune");
+        if (!remove.ok()) {
+            log.accept("[git] could not remove the worktree " + worktree + " (" + remove.output().strip()
+                    + "); close anything using it, or remove it with 'git worktree remove'");
+            return false;
+        }
+        return true;
     }
 
     /** Commits any uncommitted changes in the worktree. Returns true if a commit was made. */

@@ -145,8 +145,11 @@ Base branch and branch name are fixed once work has started.
 Tips:
 - Add `Bash(git add:*) Bash(git commit:*) Bash(git status) Bash(git diff:*)` to the agent's allowed tools,
   so it can commit with meaningful messages. Otherwise Juno makes a single commit at the end.
-- Worktrees stay in place after the PR is opened, so a resumed session or a retry reuses them. Remove one
-  with `git worktree remove <path>` once the PR is merged.
+- Once the work is pushed and the PR is opened (or an AI review's fixes are pushed and its summary posted),
+  Juno removes the ticket's worktree, so you can `git checkout` its branch in your own folder. The branch
+  itself is kept, and the next AI review recreates the worktree from it. Switch your folder off the branch
+  before running an AI review: git only allows a branch in one place at a time, and Juno says so if it's
+  still checked out. If the delivery fails, the worktree stays for Retry.
 
 ### Agent terminals
 
