@@ -56,11 +56,17 @@ public final class Fx {
         inheritStyles(alert, owner);
         alert.setTitle("Juno");
         alert.setHeaderText(header);
+        alert.setResizable(true);
         TextArea text = new TextArea(message);
         text.setEditable(false);
         text.setWrapText(true);
-        text.setPrefRowCount(Math.min(14, Math.max(3, Math.max((int) message.lines().count() + 1, message.length() / 70 + 1))));
+        text.setPrefColumnCount(80);
+        // Roomy enough to read a multi-line problem list or a git/MCP error without scrolling; resizable for more.
+        int lines = Math.max((int) message.lines().count() + 1, message.length() / 80 + 1);
+        text.setPrefRowCount(Math.min(24, Math.max(8, lines + 2)));
         alert.getDialogPane().setContent(text);
+        alert.getDialogPane().setPrefWidth(760);
+        alert.getDialogPane().setMinHeight(javafx.scene.layout.Region.USE_PREF_SIZE);
         alert.showAndWait();
     }
 
