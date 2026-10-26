@@ -120,7 +120,8 @@ public final class AgentConsoles implements AutoCloseable {
         if (name.length() > 50) {
             name = name.substring(0, 50).strip();
         }
-        return "Juno - " + (name.isEmpty() ? "ticket" : name) + ("review".equals(variant) ? " (AI review)" : "");
+        return "Juno - " + (name.isEmpty() ? "ticket" : name) + ("review".equals(variant) ? " (AI review)"
+                : "conflicts".equals(variant) ? " (resolving conflicts)" : "");
     }
 
     private String windowTitleFor(String ticketId, String variant) {

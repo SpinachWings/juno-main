@@ -82,7 +82,8 @@ public final class AgentConsole {
 
     private void run() {
         out.println(RULE);
-        out.println(" Juno agent console" + (consoleKey.endsWith("-review") ? " (AI review)" : ""));
+        out.println(" Juno agent console" + (consoleKey.endsWith("-review") ? " (AI review)"
+                : consoleKey.endsWith("-conflicts") ? " (resolving merge conflicts)" : ""));
         out.println(" Live agent activity. When the agent asks for a decision you can answer here or on the board.");
         out.println(RULE);
 

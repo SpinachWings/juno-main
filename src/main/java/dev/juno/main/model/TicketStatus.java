@@ -10,6 +10,8 @@ public enum TicketStatus {
     REVIEW("Review"),
     /** An AI review agent is addressing the pull request's comments. */
     IN_AI_REVIEW("In AI review"),
+    /** An agent is resolving the merge conflicts between the ticket's branch and its updated base branch. */
+    RESOLVING_CONFLICTS("Resolving conflicts"),
     DONE("Done");
 
     private final String label;
@@ -20,5 +22,10 @@ public enum TicketStatus {
 
     public String label() {
         return label;
+    }
+
+    /** Columns only an agent run puts a ticket in (never a manual move). */
+    public boolean isAgentOnly() {
+        return this == WORKING || this == IN_AI_REVIEW || this == RESOLVING_CONFLICTS;
     }
 }

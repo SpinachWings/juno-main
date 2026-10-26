@@ -309,10 +309,13 @@ public final class BoardView {
 
             @Override
             public void stop(Ticket t, Window owner) {
-                boolean review = t.getRunKind() == dev.juno.main.model.RunKind.REVIEW;
-                if (Fx.confirm(owner, "Stop agent?", "Stop the " + (review ? "AI review agent" : "agent")
-                        + " working on " + name(t) + "? The ticket goes back to " + (review ? "AI review" : "Pending")
-                        + "; commits and changes already made stay on its branch.")) {
+                dev.juno.main.model.RunKind kind = t.getRunKind();
+                boolean conflicts = kind == dev.juno.main.model.RunKind.CONFLICTS;
+                if (Fx.confirm(owner, "Stop agent?", "Stop the " + (kind == dev.juno.main.model.RunKind.REVIEW
+                        ? "AI review agent" : conflicts ? "conflict-resolving agent" : "agent")
+                        + " working on " + name(t) + "? The ticket goes back to " + kind.homeStatus().label()
+                        + (conflicts ? "; the unfinished merge is abandoned and the branch is left as it was."
+                        : "; commits and changes already made stay on its branch."))) {
                     service.stopWork(t.getId());
                 }
             }
@@ -331,8 +334,7 @@ public final class BoardView {
             public void respond(Ticket t, Window owner) {
                 new DecisionDialog(owner, t, service).showAndWait().ifPresent(decision -> {
                     if (decision.backToPending()) {
-                        move(t, t.getRunKind() == dev.juno.main.model.RunKind.REVIEW
-                                ? TicketStatus.REVIEW : TicketStatus.PENDING, owner);
+                        move(t, t.getRunKind().homeStatus(), owner);
                         return;
                     }
                     if (decision.approveDesign()) {
@@ -380,6 +382,13 @@ public final class BoardView {
                 Fx.async(() -> service.startReview(t.getId()),
                         count -> { },
                         err -> Fx.error(owner, "Could not start the AI review", err));
+            }
+
+            @Override
+            public void resolveConflicts(Ticket t, Window owner) {
+                Fx.async(() -> service.resolveConflicts(t.getId()),
+                        nothing -> nothing.ifPresent(message -> Fx.info(owner, "No merge conflicts", message)),
+                        err -> Fx.error(owner, "Could not resolve the conflicts", err));
             }
 
             @Override

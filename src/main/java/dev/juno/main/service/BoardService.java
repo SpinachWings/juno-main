@@ -259,14 +259,22 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         if (target == TicketStatus.IN_AI_REVIEW) {
             throw new JunoException("Use Run AI review to put a ticket into In AI review");
         }
+        if (target == TicketStatus.RESOLVING_CONFLICTS) {
+            throw new JunoException("Use Resolve conflicts to put a ticket into Resolving conflicts");
+        }
         if (preparing.contains(ticketId) || delivering.contains(ticketId)) {
             throw new JunoException(nameOf(ticketId) + " is busy; wait for it to finish first");
         }
         if (runner.isRunning(ticketId)) {
             throw new JunoException("Stop the running agent before moving " + nameOf(ticketId));
         }
+        Path abandonMerge = null;
         synchronized (this) {
             Ticket t = require(ticketId);
+            if (t.getRunKind() == RunKind.CONFLICTS && t.getStatus() == TicketStatus.AWAITING_DECISION
+                    && target != TicketStatus.AWAITING_DECISION && t.getWorktreePath() != null) {
+                abandonMerge = Path.of(t.getWorktreePath()); // giving up on the resolution
+            }
             t.setStatus(target);
             if (target != TicketStatus.AWAITING_DECISION) {
                 t.setPendingQuestion(null);
@@ -278,6 +286,10 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
             }
             t.touch();
             persist();
+        }
+        if (abandonMerge != null && Files.isDirectory(abandonMerge)) {
+            git(ticketId).abortMerge(abandonMerge);
+            log(ticketId, "[juno] the unfinished conflict resolution was abandoned; the branch is as it was");
         }
         fireChanged();
     }
@@ -458,6 +470,95 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         return feedback.size();
     }
 
+    /** Thrown inside {@link #beginRun} when a conflict resolution finds nothing to resolve. */
+    private static final class NoConflictsException extends JunoException {
+        NoConflictsException(String message) {
+            super(message);
+        }
+    }
+
+    /** What a conflict resolution run needs to know (filled in after Juno has started the merge). */
+    private record ConflictContext(String baseRef, List<String> files, List<PromptBuilder.MergedTicket> merged,
+                                   List<String> commits) {
+    }
+
+    /**
+     * Resolves merge conflicts between a ticket in Review and its updated base branch (typically after another
+     * ticket was merged into it). Juno merges {@code origin/<base>} into the ticket's branch; if that conflicts,
+     * an agent resolves the conflicts keeping the requirements of both this ticket and the merged work, then Juno
+     * completes the merge and pushes it to the same pull request.
+     *
+     * @return a message when there was nothing to resolve (the run doesn't start), empty when the agent started
+     */
+    public Optional<String> resolveConflicts(String ticketId) throws JunoException {
+        synchronized (this) {
+            if (preparing.contains(ticketId) || runner.isRunning(ticketId) || delivering.contains(ticketId)) {
+                throw new JunoException(nameOf(ticketId) + " already has an agent running");
+            }
+            Ticket t = require(ticketId);
+            if (t.getStatus() != TicketStatus.REVIEW) {
+                throw new JunoException(name(t) + " is not in the Review column");
+            }
+            if (t.getPullRequest() == null) {
+                throw new JunoException(name(t) + " has no pull request yet");
+            }
+        }
+        try {
+            beginRun(ticketId, RunKind.CONFLICTS, null, null, null);
+            return Optional.empty();
+        } catch (NoConflictsException e) {
+            log(ticketId, "[juno] " + e.getMessage());
+            return Optional.of(e.getMessage());
+        }
+    }
+
+    /** Starts the merge and gathers what the agent needs; throws {@link NoConflictsException} if it's clean. */
+    private ConflictContext startMerge(String ticketId, Path repo, Path worktree, String base, String branch)
+            throws JunoException {
+        GitWorkspace git = git(ticketId);
+        GitWorkspace.MergeResult merge;
+        try {
+            merge = git.mergeBase(worktree, base);
+        } catch (GitException e) {
+            throw new JunoException("Could not merge the latest " + base + ": " + e.getMessage(), e);
+        }
+        if (!merge.conflicts()) {
+            git.release(repo, worktree);
+            throw new NoConflictsException(merge.upToDate()
+                    ? "Branch " + branch + " already contains the latest " + base + ": there's nothing to resolve."
+                    : "Branch " + branch + " merges cleanly with the latest " + base
+                            + ": there are no conflicts to resolve.");
+        }
+        log(ticketId, "[juno] merging " + merge.baseRef() + " into " + branch + " conflicts in: "
+                + String.join(", ", merge.conflictedFiles()));
+        List<String> commits = git.commitsTouching(worktree, merge.forkPoint(), merge.baseRef(),
+                merge.conflictedFiles());
+        List<PromptBuilder.MergedTicket> merged = new ArrayList<>();
+        String history = String.join("\n", commits);
+        synchronized (this) {
+            Ticket self = require(ticketId);
+            for (Ticket other : board.getTickets()) {
+                if (other == self || !java.util.Objects.equals(other.getProjectId(), self.getProjectId())) {
+                    continue;
+                }
+                boolean byBranch = other.getBranchName() != null && !other.getBranchName().isBlank()
+                        && history.contains(other.getBranchName());
+                boolean byPr = other.getPullRequest() != null && java.util.regex.Pattern
+                        .compile("[#!]" + other.getPullRequest().number() + "\\b").matcher(history).find();
+                if (byBranch || byPr) {
+                    merged.add(new PromptBuilder.MergedTicket(other.getTitle(), other.getDescription(),
+                            other.getInitialInstructions(), other.getDesignDoc(),
+                            other.getPullRequest() == null ? null : other.getPullRequest().display()));
+                }
+            }
+        }
+        if (!merged.isEmpty()) {
+            log(ticketId, "[juno] conflicting work already merged: "
+                    + String.join(", ", merged.stream().map(m -> "'" + m.title() + "'").toList()));
+        }
+        return new ConflictContext(merge.baseRef(), merge.conflictedFiles(), merged, commits);
+    }
+
     /** How to recover an interrupted run: the Claude session to resume (if any) and the journal to recap. */
     private record Recovery(String sessionId, Path sourceJournal) {
     }
@@ -490,8 +591,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
             log(ticketId, "[juno] stopped an agent process left over from the interrupted run");
         }
         log(ticketId, "");
-        log(ticketId, "=== Resuming interrupted " + (deliveryOnly ? "push / pull request"
-                : kind == RunKind.REVIEW ? "AI review" : "work") + " ===");
+        log(ticketId, "=== Resuming interrupted " + (deliveryOnly ? "push / pull request" : kind.label()) + " ===");
         if (deliveryOnly) {
             synchronized (this) {
                 ticket(ticketId).ifPresent(t -> t.setInterrupted(false));
@@ -642,19 +742,25 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         fireChanged();
         try {
             log(ticketId, "");
-            log(ticketId, "=== " + (kind == RunKind.REVIEW && !resume ? "AI review: preparing" : "Preparing")
-                    + " branch " + branch + " (from " + base + ") ===");
+            log(ticketId, "=== " + (kind.onPullRequest() && !resume ? capitalise(kind.label()) + ": preparing"
+                    : "Preparing") + " branch " + branch + " (from " + base + ") ===");
             GitWorkspace.Prepared prepared;
+            boolean fresh = !resume && recovery == null;
             try {
                 GitWorkspace git = git(ticketId);
                 prepared = git.prepare(repo, worktree, base, branch);
-                if (kind == RunKind.REVIEW && !resume && recovery == null) {
+                if (fresh) {
+                    git.abortMerge(prepared.worktree()); // left over from an abandoned conflict resolution
+                }
+                if (kind.onPullRequest() && fresh) {
                     git.syncWithRemote(prepared.worktree(), branch);
                 }
             } catch (GitException e) {
                 log(ticketId, "[juno] " + e.getMessage());
                 throw new JunoException("Could not prepare the ticket's branch: " + e.getMessage(), e);
             }
+            final ConflictContext conflictContext = kind == RunKind.CONFLICTS && fresh
+                    ? startMerge(ticketId, repo, prepared.worktree(), base, branch) : null;
             // Skills that apply to this ticket (global, its organisation, its project) go into the worktree.
             List<String> skillNames = List.of();
             try {
@@ -710,6 +816,11 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
                             return PromptBuilder.recoveryResume(t, recapText, gitText);
                         }
                         String basePrompt = original != null ? original
+                                : kind == RunKind.CONFLICTS
+                                ? "You are resolving merge conflicts for the ticket \"" + t.getTitle() + "\": Juno "
+                                        + "started merging origin/" + t.getBaseBranch() + " into its branch. Keep the "
+                                        + "requirements of both this ticket and the merged work, leave no conflict "
+                                        + "markers, and don't commit: Juno completes the merge."
                                 : kind == RunKind.REVIEW
                                 ? "You are addressing review feedback on " + (t.getPullRequest() == null ? "the pull request"
                                         : t.getPullRequest().url()) + " for the ticket \"" + t.getTitle() + "\""
@@ -720,6 +831,8 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
                     if (!resume) {
                         return switch (kind) {
                             case REVIEW -> PromptBuilder.review(t, p, review.comments(), review.newSince());
+                            case CONFLICTS -> PromptBuilder.conflicts(t, p, conflictContext.baseRef(),
+                                    conflictContext.files(), conflictContext.merged(), conflictContext.commits());
                             case DESIGN -> PromptBuilder.design(t, p, tools);
                             case WORK -> PromptBuilder.initial(t, p, tools);
                         };
@@ -746,7 +859,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
             }
             log(ticketId, "[juno] journal: " + journal);
             try {
-                launch(request, kind == RunKind.REVIEW ? TicketStatus.IN_AI_REVIEW : TicketStatus.WORKING);
+                launch(request, kind.runningStatus());
             } catch (JunoException e) {
                 synchronized (this) {
                     journals.remove(ticketId);
@@ -768,7 +881,11 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
     // ---- terminals --------------------------------------------------------------------------
 
     private static String consoleVariant(RunKind kind) {
-        return kind == RunKind.REVIEW ? "review" : "";
+        return kind.consoleVariant();
+    }
+
+    private static String capitalise(String s) {
+        return s.isEmpty() ? s : Character.toUpperCase(s.charAt(0)) + s.substring(1);
     }
 
     private void openTerminalIfEnabled(String ticketId, RunKind kind) {
@@ -963,6 +1080,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
     @Override
     public void finished(String ticketId, AgentOutcome outcome) {
         boolean deliver = false;
+        Path abandonMerge = null;
         Recovery fallback = null;
         Path journal = journals.remove(ticketId);
         if (journal != null) {
@@ -1021,6 +1139,8 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
                 case COMPLETED -> {
                     if (kind == RunKind.REVIEW) {
                         t.setLastReviewSummary(outcome.message());
+                    } else if (kind == RunKind.CONFLICTS) {
+                        t.setLastConflictSummary(outcome.message());
                     } else {
                         t.setLastSummary(outcome.message());
                     }
@@ -1043,13 +1163,20 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
                             + "\n\nReply with guidance to retry, or move the ticket elsewhere.");
                 }
                 case CANCELLED -> {
-                    t.setStatus(kind == RunKind.REVIEW ? TicketStatus.REVIEW : TicketStatus.PENDING);
+                    t.setStatus(kind.homeStatus());
                     t.setPendingQuestion(null);
+                    if (kind == RunKind.CONFLICTS && t.getWorktreePath() != null) {
+                        abandonMerge = Path.of(t.getWorktreePath());
+                    }
                 }
             }
             t.touch();
             persist();
             }
+        }
+        if (abandonMerge != null) {
+            git(ticketId).abortMerge(abandonMerge); // stopped mid-resolution: leave the branch as it was
+            log(ticketId, "[juno] conflict resolution stopped; the unfinished merge was abandoned");
         }
         fireChanged();
         if (deliver) {
@@ -1133,6 +1260,8 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         try {
             if (kind == RunKind.REVIEW) {
                 pushReview(ticketId);
+            } else if (kind == RunKind.CONFLICTS) {
+                pushConflictResolution(ticketId);
             } else {
                 openPullRequest(ticketId);
             }
@@ -1141,7 +1270,8 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
                 ticket(ticketId).ifPresent(t -> {
                     t.setPullRequestError(e.getMessage());
                     t.setStatus(TicketStatus.AWAITING_DECISION);
-                    t.setPendingQuestion("Juno couldn't finish " + (kind == RunKind.REVIEW ? "the AI review" : "the ticket")
+                    t.setPendingQuestion("Juno couldn't finish " + (kind == RunKind.REVIEW ? "the AI review"
+                            : kind == RunKind.CONFLICTS ? "resolving the merge conflicts" : "the ticket")
                             + ": " + e.getMessage() + "\n\nFix the cause and use Retry, or reply here to have the "
                             + "agent deal with it.");
                     t.touch();
@@ -1280,6 +1410,64 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
     }
 
     /**
+     * Completes a conflict resolution: checks no conflict markers remain, commits the merge (both parents), checks
+     * the branch now contains the latest base, and pushes it to the pull request. The ticket returns to Review.
+     */
+    private void pushConflictResolution(String ticketId) throws JunoException, GitException {
+        Ticket t;
+        Path repo;
+        Path worktree;
+        String branch;
+        String base;
+        PullRequestRef pr;
+        synchronized (this) {
+            t = require(ticketId);
+            Project project = settings.project(t.getProjectId()).orElse(null);
+            repo = project == null ? null : Path.of(project.getPath());
+            worktree = Path.of(t.getWorktreePath());
+            branch = t.getBranchName();
+            base = t.getBaseBranch();
+            pr = t.getPullRequest();
+        }
+        GitWorkspace git = git(ticketId);
+        String baseRef = "origin/" + base;
+        log(ticketId, "");
+        log(ticketId, "=== Merge conflicts: completing the merge of " + baseRef + " into " + branch + " ===");
+        List<String> markers = git.filesWithConflictMarkers(worktree, git.changedFiles(worktree));
+        if (!markers.isEmpty()) {
+            throw new JunoException("Conflict markers are still in " + String.join(", ", markers)
+                    + ". Reply to have the agent finish them, or fix them in " + worktree + " and use Retry.");
+        }
+        if (git.commitLeftovers(worktree, "Merge " + baseRef + " into " + branch + "\n\nResolved conflicts with "
+                + "the latest " + base + " (Juno).")) {
+            log(ticketId, "[juno] committed the merge");
+        }
+        List<String> committedMarkers = git.filesWithConflictMarkers(worktree, git.mergeCommitFiles(worktree));
+        if (!committedMarkers.isEmpty()) {
+            throw new JunoException("The merge commit still has conflict markers in "
+                    + String.join(", ", committedMarkers) + ". Fix them in " + worktree + ", commit, and use Retry.");
+        }
+        if (git.mergeInProgress(worktree) || !git.contains(worktree, baseRef)) {
+            throw new JunoException("The merge of " + baseRef + " into " + branch + " wasn't completed. Use Retry, "
+                    + "or move the ticket back to Review and run Resolve conflicts again.");
+        }
+        git.push(worktree, branch);
+        synchronized (this) {
+            t.setConflictResolutions(t.getConflictResolutions() + 1);
+            t.setPullRequestError(null);
+            t.setStatus(TicketStatus.REVIEW);
+            t.setPendingQuestion(null);
+            t.touch();
+            persist();
+        }
+        log(ticketId, "[juno] pushed the resolved merge to " + (pr == null ? branch : pr.display())
+                + "; moved back to Review");
+        if (repo != null) {
+            releaseBranch(ticketId, repo, worktree, branch);
+        }
+    }
+
+    /**
      * After a run is delivered (pushed, PR opened or review posted), removes the ticket's worktree so its branch
      * can be checked out in your own folder. The next run (AI review, or Start after moving it back) recreates
      * it from the branch. A worktree with uncommitted changes is kept.
@@ -1330,7 +1518,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         boolean changed = false;
         for (Ticket t : board.getTickets()) {
             boolean midRun = t.getActiveRun() != null || t.isDeliveryPending()
-                    || t.getStatus() == TicketStatus.WORKING || t.getStatus() == TicketStatus.IN_AI_REVIEW;
+                    || t.getStatus().isAgentOnly();
             if (midRun && !t.isInterrupted()) {
                 t.setInterrupted(true);
                 if (t.getActiveRun() != null && t.getActiveRun().journal() != null) {

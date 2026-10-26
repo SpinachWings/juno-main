@@ -7,8 +7,9 @@ A JavaFX orchestrator for Claude Code agents. Tickets move across a six-column b
 | **Pending** | Created or imported, not started. **Start** hands the ticket to an agent. |
 | **Processing** | An agent is working on the ticket's branch. The ticket stays here until its branch is pushed and its pull request opened. |
 | **Awaiting decision** | The agent asked a question, failed, or Juno couldn't push / open the PR. Answer on the board (**Respond**) or in the ticket's terminal; **Retry** re-runs a failed push. |
-| **Review** | PR/MR open (link on the card) and an **AI reviews run** counter. **Run AI review** starts an AI review; **Move to Done** asks for confirmation first. Juno never merges: a human merges the PR in GitLab/GitHub. |
+| **Review** | PR/MR open (link on the card) and an **AI reviews run** counter. **Run AI review** starts an AI review; **Resolve conflicts** brings the branch up to date with its base branch; **Move to Done** asks for confirmation first. Juno never merges: a human merges the PR in GitLab/GitHub. |
 | **In AI review** | An AI review agent is addressing the PR's comments in its own terminal. When it finishes, its fixes are pushed and the ticket returns to Review. |
+| **Resolving conflicts** | An agent is resolving merge conflicts between the branch and its updated base branch, in its own terminal. When it finishes, Juno pushes the merge and the ticket returns to Review. |
 | **Done** | Finished. **Remove from Done** sends it back to Review (or Pending); **Delete** removes it from Juno. |
 
 Tickets can be imported from or uploaded to GitLab and GitHub. Juno does this through the
@@ -186,6 +187,26 @@ up and the ticket stays in Review. Otherwise the ticket moves to **In AI review*
 
 Then the ticket returns to Review with its counter incremented. The review agent gets its own terminal
 (`Juno - <ticket title> (AI review)`), and its questions also come through Awaiting decision.
+
+### Resolving merge conflicts
+
+When two tickets are worked on in parallel and one is merged first, the other's PR can conflict with the
+updated base branch. **Resolve conflicts** (Review column) handles that:
+1. Juno brings the ticket's branch up to date, fetches `origin/<base>` and merges it into the branch. If it
+   merges cleanly, or the branch already contains it, nothing changes and Juno says so.
+2. Otherwise the ticket moves to **Resolving conflicts**, and an agent gets the conflicting files plus the
+   requirements of **both** sides: this ticket (description, instructions, design doc, what was implemented)
+   and the work already merged that it conflicts with. Juno finds that work from the base branch's commits
+   that touched the conflicting files, matching them to Juno tickets by PR number or branch name, and lists
+   those commits too. The agent's job is to keep both sets of requirements working, and to explain any
+   trade-off.
+3. Juno checks that no conflict markers are left, commits the merge (a normal merge commit, no rebase or
+   force-push), confirms the branch now contains the latest base, pushes it to the same PR and moves the
+   ticket back to Review, with the agent's summary on the card.
+
+Agents can't run `git merge` themselves. Juno starts and completes the merge. Stopping the agent, or moving
+the ticket back to Review from Awaiting decision, abandons the unfinished merge and leaves the branch as it
+was.
 
 ### Interruptions and Resume
 

@@ -200,6 +200,126 @@ public final class GitWorkspace {
         }
     }
 
+    /** Outcome of merging the updated base branch into the ticket's branch. */
+    public record MergeResult(boolean conflicts, boolean upToDate, String baseRef, String forkPoint,
+                              List<String> conflictedFiles) {
+    }
+
+    /**
+     * Merges the latest {@code origin/<base>} into the worktree's branch without committing. With conflicts, the
+     * conflicted files are left with git's conflict markers for an agent to resolve, and the merge stays in
+     * progress so committing it records both parents. Without conflicts the merge is abandoned: nothing changes.
+     */
+    public MergeResult mergeBase(Path worktree, String baseBranch) throws GitException {
+        abortMerge(worktree);
+        Result fetch = run(worktree, NETWORK_TIMEOUT, false, "fetch", "origin", baseBranch);
+        String baseRef = "origin/" + baseBranch;
+        if (!fetch.ok() || !verify(worktree, "refs/remotes/" + baseRef)) {
+            throw new GitException("Could not fetch " + baseRef + ": " + fetch.output().strip());
+        }
+        Result forkPoint = run(worktree, LOCAL_TIMEOUT, false, "merge-base", "HEAD", baseRef);
+        require(forkPoint, "git merge-base");
+        if (run(worktree, LOCAL_TIMEOUT, false, "merge-base", "--is-ancestor", baseRef, "HEAD").ok()) {
+            return new MergeResult(false, true, baseRef, forkPoint.output().strip(), List.of());
+        }
+        Result merge = run(worktree, LOCAL_TIMEOUT, true, "merge", "--no-ff",
+                "--no-commit", baseRef);
+        Result unmerged = run(worktree, LOCAL_TIMEOUT, false, "diff", "--name-only", "--diff-filter=U");
+        List<String> files = unmerged.ok() ? unmerged.output().lines().map(String::strip)
+                .filter(l -> !l.isEmpty()).toList() : List.of();
+        if (merge.ok() || files.isEmpty()) {
+            abortMerge(worktree);
+            if (!merge.ok()) {
+                throw new GitException("Merging " + baseRef + " failed: " + merge.output().strip());
+            }
+            return new MergeResult(false, false, baseRef, forkPoint.output().strip(), List.of());
+        }
+        return new MergeResult(true, false, baseRef, forkPoint.output().strip(), files);
+    }
+
+    /** Whether a merge is in progress in the worktree. */
+    public boolean mergeInProgress(Path worktree) {
+        return verify(worktree, "MERGE_HEAD");
+    }
+
+    /** Abandons an unfinished merge, if any, restoring the branch as it was. */
+    public void abortMerge(Path worktree) {
+        if (mergeInProgress(worktree)) {
+            run(worktree, LOCAL_TIMEOUT, true, "merge", "--abort");
+        }
+    }
+
+    /** Files (of those given) that still contain conflict markers. */
+    public List<String> filesWithConflictMarkers(Path worktree, List<String> files) {
+        List<String> out = new ArrayList<>();
+        for (String f : files) {
+            Path file = worktree.resolve(f);
+            if (!Files.isRegularFile(file)) {
+                continue;
+            }
+            try (var lines = Files.lines(file, java.nio.charset.StandardCharsets.ISO_8859_1)) {
+                if (lines.anyMatch(l -> l.startsWith("<<<<<<< ") || l.startsWith(">>>>>>> ") || l.equals("<<<<<<<")
+                        || l.equals(">>>>>>>"))) {
+                    out.add(f);
+                }
+            } catch (IOException | java.io.UncheckedIOException e) {
+                // unreadable: let git decide
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Commits on {@code baseRef} since {@code forkPoint} that touched the files, each as "hash subject" plus its
+     * body (e.g. "Merge pull request #12 from acme/juno/x").
+     */
+    public List<String> commitsTouching(Path worktree, String forkPoint, String baseRef, List<String> files) {
+        // --first-parent: the base branch's own history, so a merged pull request shows up as its merge commit
+        // (whose message names the PR and branch), or as its squash commit.
+        List<String> args = new ArrayList<>(List.of("log", "--first-parent", "--format=%h %s%n%b%x1e",
+                forkPoint + ".." + baseRef, "--"));
+        args.addAll(files);
+        Result log = run(worktree, LOCAL_TIMEOUT, false, args.toArray(String[]::new));
+        if (!log.ok()) {
+            return List.of();
+        }
+        List<String> out = new ArrayList<>();
+        for (String entry : log.output().split("\u001e")) {
+            String e = entry.strip();
+            if (!e.isEmpty()) {
+                out.add(e);
+            }
+        }
+        return out;
+    }
+
+    /** Files changed in the worktree compared with HEAD (staged, unstaged or still unmerged). */
+    public List<String> changedFiles(Path worktree) {
+        Result diff = run(worktree, LOCAL_TIMEOUT, false, "diff", "--name-only", "HEAD");
+        Result unmerged = run(worktree, LOCAL_TIMEOUT, false, "diff", "--name-only", "--diff-filter=U");
+        java.util.LinkedHashSet<String> files = new java.util.LinkedHashSet<>();
+        for (Result r : List.of(diff, unmerged)) {
+            if (r.ok()) {
+                r.output().lines().map(String::strip).filter(l -> !l.isEmpty()).forEach(files::add);
+            }
+        }
+        return List.copyOf(files);
+    }
+
+    /** Files the merge commit at HEAD changed relative to its first parent (empty if HEAD isn't a merge). */
+    public List<String> mergeCommitFiles(Path worktree) {
+        if (!verify(worktree, "HEAD^2")) {
+            return List.of();
+        }
+        Result diff = run(worktree, LOCAL_TIMEOUT, false, "diff", "--name-only", "HEAD^1", "HEAD");
+        return diff.ok() ? diff.output().lines().map(String::strip).filter(l -> !l.isEmpty()).toList() : List.of();
+    }
+
+    /** Whether {@code ref} is contained in the worktree's HEAD. */
+    public boolean contains(Path worktree, String ref) {
+        return run(worktree, LOCAL_TIMEOUT, false, "merge-base", "--is-ancestor", ref, "HEAD").ok();
+    }
+
     /**
      * Brings the worktree up to date with {@code origin/<branch>} (e.g. commits a reviewer pushed), fast-forward
      * only. Does nothing if the branch is not on origin yet or the local branch is already ahead.

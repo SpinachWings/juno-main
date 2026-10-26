@@ -37,6 +37,10 @@ public final class Ticket {
     private String lastReviewAt;
     /** The review agent's summary from its last run. */
     private String lastReviewSummary;
+    /** The agent's summary from the last merge conflict resolution. */
+    private String lastConflictSummary;
+    /** How many times merge conflicts have been resolved. */
+    private int conflictResolutions;
     /** How many AI reviews have completed. */
     private int reviewCount;
     /** The run in progress (persisted so an interrupted run can be resumed), or null. */
@@ -219,6 +223,22 @@ public final class Ticket {
 
     public String getLastReviewSummary() {
         return lastReviewSummary;
+    }
+
+    public String getLastConflictSummary() {
+        return lastConflictSummary;
+    }
+
+    public void setLastConflictSummary(String lastConflictSummary) {
+        this.lastConflictSummary = lastConflictSummary;
+    }
+
+    public int getConflictResolutions() {
+        return conflictResolutions;
+    }
+
+    public void setConflictResolutions(int conflictResolutions) {
+        this.conflictResolutions = conflictResolutions;
     }
 
     public void setLastReviewSummary(String lastReviewSummary) {

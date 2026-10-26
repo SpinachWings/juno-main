@@ -105,6 +105,11 @@ public final class PromptBuilder {
                 ? "Continue addressing the review feedback with this decision. Same rules as before: commit to `"
                         + ticket.getBranchName() + "`, do not push, and end with a summary (or the "
                         + StreamJsonParser.DECISION_MARKER + " line if you need another decision)."
+                : ticket.getRunKind() == RunKind.CONFLICTS
+                ? "Continue resolving the merge conflicts with this decision. Same rules as before: keep both "
+                        + "tickets' requirements, leave no conflict markers, do not commit or push (Juno completes the "
+                        + "merge), and end with a summary (or the " + StreamJsonParser.DECISION_MARKER
+                        + " line if you need another decision)."
                 : rules(ticket);
         return "Human decision for \"" + ticket.getTitle() + "\":\n\n" + answer.strip()
                 + "\n\nContinue with this decision.\n\n" + rest;
@@ -170,6 +175,97 @@ public final class PromptBuilder {
         return sb.toString();
     }
 
+    /** Another ticket whose work was merged into the base branch and now conflicts with this one. */
+    public record MergedTicket(String title, String description, String instructions, String designDoc,
+                               String pullRequest) {
+    }
+
+    /**
+     * Prompt for resolving merge conflicts: Juno has merged the updated base branch into the ticket's branch,
+     * leaving conflict markers; the agent resolves them so that both this ticket's requirements and those of the
+     * work already merged into the base branch still hold.
+     */
+    public static String conflicts(Ticket ticket, Project project, String baseRef, List<String> conflictedFiles,
+                                   List<MergedTicket> mergedTickets, List<String> baseCommits) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("You are an autonomous software engineer resolving merge conflicts in the ")
+                .append(project.getName()).append(" repository (your current working directory).\n\n")
+                .append("This ticket's branch `").append(ticket.getBranchName()).append("` has an open ")
+                .append(ticket.getPullRequest() == null ? "pull request"
+                        : ticket.getPullRequest().tracker().pullRequestNoun() + " (" + ticket.getPullRequest().url() + ")")
+                .append(". Meanwhile other work was merged into `").append(baseRef).append("`, and the two now ")
+                .append("conflict. Juno has started merging `").append(baseRef).append("` into the branch; the ")
+                .append("conflicting files contain git's conflict markers (<<<<<<<, =======, >>>>>>>).\n\n");
+
+        sb.append("## Your goal\n")
+                .append("Resolve every conflict so that BOTH sets of requirements still hold: everything this ticket ")
+                .append("set out to do (below), and everything the work already merged into `").append(baseRef)
+                .append("` set out to do (further below). Don't simply pick one side: combine them. Where they ")
+                .append("genuinely can't both hold, keep the merged work's behaviour, adapt this ticket's changes ")
+                .append("to fit, and explain the trade-off in your summary.\n\n");
+
+        sb.append("## This ticket: ").append(ticket.getTitle()).append("\n\n")
+                .append(ticket.getDescription().isBlank() ? "(no description provided)" : ticket.getDescription().strip())
+                .append("\n\n");
+        if (!ticket.getInitialInstructions().isBlank()) {
+            sb.append("### Instructions it was given\n").append(ticket.getInitialInstructions().strip()).append("\n\n");
+        }
+        if (!ticket.getDesignDoc().isBlank()) {
+            sb.append("### Its approved design doc\n").append(ticket.getDesignDoc().strip()).append("\n\n");
+        }
+        if (ticket.getLastSummary() != null && !ticket.getLastSummary().isBlank()) {
+            sb.append("### What was implemented\n").append(ticket.getLastSummary().strip()).append("\n\n");
+        }
+
+        sb.append("## Work already merged into `").append(baseRef).append("` that conflicts with it\n\n");
+        if (mergedTickets.isEmpty()) {
+            sb.append("(No Juno ticket could be matched to these changes; work out their intent from the commits ")
+                    .append("below, with `git show <hash>` and `git log`.)\n\n");
+        }
+        for (MergedTicket m : mergedTickets) {
+            sb.append("### ").append(m.title()).append(m.pullRequest() == null ? "" : " (" + m.pullRequest() + ")")
+                    .append("\n").append(m.description() == null || m.description().isBlank()
+                            ? "(no description)" : m.description().strip()).append("\n");
+            if (m.instructions() != null && !m.instructions().isBlank()) {
+                sb.append("Instructions it was given: ").append(m.instructions().strip()).append("\n");
+            }
+            if (m.designDoc() != null && !m.designDoc().isBlank()) {
+                String doc = m.designDoc().strip();
+                sb.append("Its design doc:\n").append(doc.length() > 6000 ? doc.substring(0, 6000) + "\n(...)" : doc)
+                        .append("\n");
+            }
+            sb.append("\n");
+        }
+        if (!baseCommits.isEmpty()) {
+            sb.append("Commits on `").append(baseRef).append("` since this branch was created that touch the ")
+                    .append("conflicting files (inspect them with `git show <hash>`):\n");
+            baseCommits.stream().limit(40).forEach(c -> sb.append("- ").append(c.replace("\n", "\n  ")).append("\n"));
+            sb.append("\n");
+        }
+
+        sb.append("## Conflicting files\n");
+        conflictedFiles.forEach(f -> sb.append("- `").append(f).append("`\n"));
+
+        sb.append("""
+
+                ## How to work
+                - Open each conflicting file, understand both sides (`git diff`, `git log`, `git show` help), and edit
+                  it so that no conflict markers remain and both intents are preserved. Check other files too: code
+                  that merged cleanly may still need adjusting so the two changes work together.
+                - Build the code and run the relevant tests where possible.
+                - Do NOT commit, and do not run `git merge`, `git rebase`, `git reset`, `git checkout` or `git push`:
+                  Juno completes the merge with your changes and pushes it to the %1$s. Never merge, approve or
+                  close the %1$s: a human does that. Skills may help, but these rules win over any skill.
+                - When you have finished, reply with a concise summary: each conflict, how you resolved it, and how
+                  both tickets' requirements are still met.
+                - If you cannot resolve a conflict without a decision from a human, stop and make the LAST line of
+                  your final reply exactly:
+                  %2$s <your question, listing the options if there are any>
+                """.formatted(ticket.getPullRequest() == null ? "pull request"
+                        : ticket.getPullRequest().tracker().pullRequestNoun(), StreamJsonParser.DECISION_MARKER));
+        return sb.toString();
+    }
+
     /**
      * Resuming an interrupted run within the same Claude session: the conversation is restored, so this only
      * explains the interruption and gives the recap and current branch state.
@@ -188,7 +284,11 @@ public final class PromptBuilder {
                 command or build that was running, a commit that may not have happened) before moving on, and \
                 don't redo work that is already done. %5$s
                 """.formatted(ticket.getTitle(), recap, ticket.getBranchName(), gitState,
-                ticket.getRunKind() == RunKind.DESIGN
+                ticket.getRunKind() == RunKind.CONFLICTS
+                        ? "You were resolving merge conflicts: keep both tickets' requirements, leave no conflict "
+                                + "markers, don't commit or push (Juno completes the merge), and finish with your "
+                                + "summary (or the " + StreamJsonParser.DECISION_MARKER + " line if you need a decision)."
+                        : ticket.getRunKind() == RunKind.DESIGN
                         ? "You were writing a design doc: don't modify files; ask questions with the "
                                 + StreamJsonParser.DECISION_MARKER + " line or reply with the full doc in "
                                 + DesignDocs.OPEN + " ... " + DesignDocs.CLOSE + "."
@@ -214,7 +314,8 @@ public final class PromptBuilder {
                 ### Recorded steps of the interrupted session
                 %2$s
                 ### Current state of branch `%3$s`
-                %4$s""".formatted(ticket.getRunKind() == RunKind.REVIEW ? "review" : "ticket", recap,
+                %4$s""".formatted(ticket.getRunKind() == RunKind.REVIEW ? "review"
+                : ticket.getRunKind() == RunKind.CONFLICTS ? "merge conflict resolution" : "ticket", recap,
                 ticket.getBranchName(), gitState);
     }
 

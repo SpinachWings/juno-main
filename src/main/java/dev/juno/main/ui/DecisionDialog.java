@@ -1,6 +1,5 @@
 package dev.juno.main.ui;
 
-import dev.juno.main.model.RunKind;
 import dev.juno.main.model.Ticket;
 import dev.juno.main.service.BoardService;
 import javafx.event.ActionEvent;
@@ -36,8 +35,8 @@ final class DecisionDialog extends Dialog<DecisionDialog.Decision> {
         ButtonType resume = new ButtonType(design ? "Request changes" : "Resume agent",
                 design ? ButtonBar.ButtonData.OTHER : ButtonBar.ButtonData.OK_DONE);
         ButtonType export = new ButtonType("Export .txt", ButtonBar.ButtonData.HELP);
-        ButtonType pending = new ButtonType(ticket.getRunKind() == RunKind.REVIEW
-                ? "Move back to Review" : "Move back to Pending", ButtonBar.ButtonData.LEFT);
+        ButtonType pending = new ButtonType("Move back to " + ticket.getRunKind().homeStatus().label(),
+                ButtonBar.ButtonData.LEFT);
         if (design) {
             getDialogPane().getButtonTypes().addAll(approve, resume, export, pending, ButtonType.CANCEL);
         } else {

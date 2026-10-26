@@ -93,6 +93,57 @@ class GitWorkspaceTest {
     }
 
     @Test
+    void mergesTheUpdatedBaseBranch() throws Exception {
+        Path origin = tmp.resolve("o.git");
+        Path repo = tmp.resolve("r");
+        git(tmp, "init", "-q", "--bare", "-b", "main", origin.toString());
+        git(tmp, "clone", "-q", origin.toString(), repo.toString());
+        git(repo, "config", "user.email", "t@example.com");
+        git(repo, "config", "user.name", "T");
+        Files.writeString(repo.resolve("a.txt"), "one\n");
+        Files.writeString(repo.resolve("b.txt"), "b\n");
+        git(repo, "add", ".");
+        git(repo, "commit", "-qm", "init");
+        git(repo, "push", "-q", "origin", "main");
+        GitWorkspace ws = new GitWorkspace("git", line -> { });
+        Path wt = tmp.resolve("wt");
+        ws.prepare(repo, wt, "main", "juno/x");
+
+        assertTrue(ws.mergeBase(wt, "main").upToDate());
+
+        // main moves on in another file: merges cleanly, and nothing is changed.
+        Files.writeString(repo.resolve("b.txt"), "b2\n");
+        git(repo, "commit", "-qam", "b2");
+        git(repo, "push", "-q", "origin", "main");
+        GitWorkspace.MergeResult clean = ws.mergeBase(wt, "main");
+        assertFalse(clean.conflicts());
+        assertFalse(clean.upToDate());
+        assertFalse(ws.mergeInProgress(wt));
+
+        // Both change the same line: conflicts are left for the agent, with the merge in progress.
+        Files.writeString(wt.resolve("a.txt"), "mine\n");
+        ws.commitLeftovers(wt, "mine");
+        Files.writeString(repo.resolve("a.txt"), "theirs\n");
+        git(repo, "commit", "-qam", "Merge pull request #7 from acme/juno/other");
+        git(repo, "push", "-q", "origin", "main");
+        GitWorkspace.MergeResult conflict = ws.mergeBase(wt, "main");
+        assertTrue(conflict.conflicts());
+        assertEquals(List.of("a.txt"), conflict.conflictedFiles());
+        assertTrue(ws.mergeInProgress(wt));
+        assertEquals(List.of("a.txt"), ws.filesWithConflictMarkers(wt, ws.changedFiles(wt)));
+        assertTrue(ws.commitsTouching(wt, conflict.forkPoint(), conflict.baseRef(), conflict.conflictedFiles())
+                .getFirst().contains("#7"));
+
+        // Resolved: committing records the merge, and the branch now contains main.
+        Files.writeString(wt.resolve("a.txt"), "mine and theirs\n");
+        assertTrue(ws.filesWithConflictMarkers(wt, ws.changedFiles(wt)).isEmpty());
+        ws.commitLeftovers(wt, "merge");
+        assertFalse(ws.mergeInProgress(wt));
+        assertTrue(ws.contains(wt, "origin/main"));
+        assertTrue(ws.mergeCommitFiles(wt).contains("a.txt"));
+    }
+
+    @Test
     void rejectsBadInput() {
         GitWorkspace ws = new GitWorkspace("git", line -> { });
         assertThrows(() -> ws.prepare(tmp.resolve("missing"), tmp.resolve("wt"), "main", "x"));
