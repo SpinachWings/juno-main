@@ -523,7 +523,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
             throw new JunoException("Could not merge the latest " + base + ": " + e.getMessage(), e);
         }
         if (!merge.conflicts()) {
-            git.release(repo, worktree);
+            releaseBranch(ticketId, repo, worktree, branch);
             throw new NoConflictsException(merge.upToDate()
                     ? "Branch " + branch + " already contains the latest " + base + ": there's nothing to resolve."
                     : "Branch " + branch + " merges cleanly with the latest " + base
@@ -1016,8 +1016,8 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
         String label = "'" + agent.profile().getName() + "' (" + profile.getModel() + ", assigned on "
                 + agent.level().label() + (agent.level() == AgentAssignment.Level.TICKET ? "" : " " + agent.owner())
                 + ")";
-        return new AgentRunner.Request(t.getId(), workDir, prompt.apply(mcpConfig != null),
-                resumeSession, profile, mcpConfig, label);
+        String text = prompt.apply(mcpConfig != null) + PromptBuilder.allowedCommands(profile.getAllowedTools());
+        return new AgentRunner.Request(t.getId(), workDir, text, resumeSession, profile, mcpConfig, label);
     }
 
     private Project requireProjectUnchecked(Ticket t) {
@@ -1413,8 +1413,10 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
      * Completes a conflict resolution: checks no conflict markers remain, commits the merge (both parents), checks
      * the branch now contains the latest base, and pushes it to the pull request. The ticket returns to Review.
      */
-    private void pushConflictResolution(String ticketId) throws JunoException, GitException {
+    private void pushConflictResolution(String ticketId) throws JunoException, GitException, McpException {
         Ticket t;
+        Organisation org;
+        String summary;
         Path repo;
         Path worktree;
         String branch;
@@ -1424,10 +1426,13 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
             t = require(ticketId);
             Project project = settings.project(t.getProjectId()).orElse(null);
             repo = project == null ? null : Path.of(project.getPath());
+            org = project == null ? null : settings.organisationOf(project).orElse(null);
             worktree = Path.of(t.getWorktreePath());
             branch = t.getBranchName();
             base = t.getBaseBranch();
             pr = t.getPullRequest();
+            summary = t.getLastConflictSummary() == null || t.getLastConflictSummary().isBlank()
+                    ? "_The agent did not provide a summary._" : t.getLastConflictSummary().strip();
         }
         GitWorkspace git = git(ticketId);
         String baseRef = "origin/" + base;
@@ -1452,6 +1457,16 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
                     + "or move the ticket back to Review and run Resolve conflicts again.");
         }
         git.push(worktree, branch);
+        if (pr != null && org != null) {
+            List<String> files = git.mergeCommitFiles(worktree);
+            String comment = "### Merge conflicts resolved\n\nMerged the latest `" + base + "` into `" + branch
+                    + "` and resolved the conflicts.\n\n" + summary + "\n\n"
+                    + (files.isEmpty() ? "" : "_Files changed by the merge: " + String.join(", ", files.stream()
+                            .limit(30).map(f -> "`" + f + "`").toList()) + (files.size() > 30 ? ", ..." : "") + "_\n\n")
+                    + ReviewComment.JUNO_MARKER;
+            trackers.commentOnPullRequest(org, pr.tracker(), pr.location(), pr.number(), comment);
+            log(ticketId, "[juno] posted the conflict resolution summary on " + pr.display());
+        }
         synchronized (this) {
             t.setConflictResolutions(t.getConflictResolutions() + 1);
             t.setPullRequestError(null);
@@ -1473,8 +1488,35 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
      * it from the branch. A worktree with uncommitted changes is kept.
      */
     private void releaseBranch(String ticketId, Path repo, Path worktree, String branch) {
-        if (git(ticketId).release(repo, worktree)) {
+        GitWorkspace.Release result = git(ticketId).release(repo, worktree, branch);
+        if (result == GitWorkspace.Release.RELEASED) {
             log(ticketId, "[juno] released branch " + branch + ": you can check it out in your own folder now");
+        } else if (result == GitWorkspace.Release.LOCKED) {
+            log(ticketId, "[juno] couldn't free branch " + branch + " yet: Windows reports files under "
+                    + repo.resolve(".git").resolve("worktrees") + " as in use. Common causes: OneDrive syncing the "
+                    + "project folder, or an editor/IDE with the project open. Juno keeps retrying for 10 minutes; "
+                    + "you can also run 'git worktree prune' in the project once they're closed.");
+            Thread.ofVirtual().name("release-" + ticketId).start(() -> {
+                for (int i = 0; i < 20; i++) {
+                    try {
+                        Thread.sleep(30_000);
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                    synchronized (this) {
+                        // Another run started on the ticket: its worktree is in use again.
+                        if (preparing.contains(ticketId) || runner.isRunning(ticketId) || delivering.contains(ticketId)) {
+                            return;
+                        }
+                    }
+                    if (new GitWorkspace("git", line -> { }).release(repo, worktree, branch)
+                            == GitWorkspace.Release.RELEASED) {
+                        log(ticketId, "[juno] released branch " + branch + ": you can check it out in your own "
+                                + "folder now");
+                        return;
+                    }
+                }
+            });
         }
     }
 

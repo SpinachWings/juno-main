@@ -149,30 +149,47 @@ public final class GitWorkspace {
         return null;
     }
 
+    /** Outcome of {@link #release}. */
+    public enum Release { RELEASED, HAS_CHANGES, LOCKED }
+
     /**
      * Removes the ticket's worktree once its work is committed and pushed, so its branch is free to check out
-     * anywhere else (the branch itself is kept; the next run recreates the worktree). Does nothing and returns
-     * false if the worktree still has uncommitted changes or can't be removed (e.g. a file is open).
+     * anywhere else (the branch itself is kept; the next run recreates the worktree). Keeps a worktree with
+     * uncommitted changes. On Windows, files can be briefly locked by other programs (OneDrive syncing the repo,
+     * an editor or IDE watching {@code .git}, antivirus), so removal is retried a few times before giving up.
      */
-    public boolean release(Path repo, Path worktree) {
-        if (!Files.isDirectory(worktree)) {
+    public Release release(Path repo, Path worktree, String branch) {
+        if (Files.isDirectory(worktree)) {
+            Result status = run(worktree, LOCAL_TIMEOUT, false, "status", "--porcelain");
+            if (!status.ok() || !status.output().isBlank()) {
+                log.accept("[git] kept the worktree " + worktree + ": it has uncommitted changes");
+                return Release.HAS_CHANGES;
+            }
+            for (int attempt = 1; attempt <= 5 && Files.isDirectory(worktree); attempt++) {
+                // --force only covers files git ignores (e.g. Juno's skills folder); there are no other changes.
+                if (run(repo, LOCAL_TIMEOUT, false, "worktree", "remove", "--force", worktree.toString()).ok()) {
+                    break;
+                }
+                pause(attempt * 1000L);
+            }
+        }
+        // The worktree folder may be gone while git's record of it (.git/worktrees/<name>) is still locked.
+        for (int attempt = 1; attempt <= 5; attempt++) {
             run(repo, LOCAL_TIMEOUT, false, "worktree", "prune");
-            return true;
+            if (!Files.isDirectory(worktree) && checkedOutAt(repo, branch) == null) {
+                return Release.RELEASED;
+            }
+            pause(attempt * 1000L);
         }
-        Result status = run(worktree, LOCAL_TIMEOUT, false, "status", "--porcelain");
-        if (!status.ok() || !status.output().isBlank()) {
-            log.accept("[git] kept the worktree " + worktree + ": it has uncommitted changes");
-            return false;
+        return Release.LOCKED;
+    }
+
+    private static void pause(long ms) {
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
-        // --force only covers files git ignores (e.g. Juno's skills folder); there are no other changes.
-        Result remove = run(repo, LOCAL_TIMEOUT, false, "worktree", "remove", "--force", worktree.toString());
-        run(repo, LOCAL_TIMEOUT, false, "worktree", "prune");
-        if (!remove.ok()) {
-            log.accept("[git] could not remove the worktree " + worktree + " (" + remove.output().strip()
-                    + "); close anything using it, or remove it with 'git worktree remove'");
-            return false;
-        }
-        return true;
     }
 
     /** Commits any uncommitted changes in the worktree. Returns true if a commit was made. */

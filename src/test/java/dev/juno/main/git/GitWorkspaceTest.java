@@ -65,14 +65,14 @@ class GitWorkspaceTest {
 
         // Uncommitted changes keep the worktree.
         Files.writeString(worktree.resolve("c.txt"), "c");
-        assertFalse(ws.release(repo, worktree));
+        assertEquals(GitWorkspace.Release.HAS_CHANGES, ws.release(repo, worktree, "juno/juno-1-test"));
         Files.delete(worktree.resolve("c.txt"));
 
         // Once delivered, the worktree is released and the branch can be checked out in the user's folder.
         Files.createDirectories(worktree.resolve(".claude/skills/juno-x"));
         ws.exclude(worktree, "/.claude/skills/juno-*/");
         Files.writeString(worktree.resolve(".claude/skills/juno-x/SKILL.md"), "skill");
-        assertTrue(ws.release(repo, worktree));
+        assertEquals(GitWorkspace.Release.RELEASED, ws.release(repo, worktree, "juno/juno-1-test"));
         assertFalse(Files.exists(worktree));
         git(repo, "checkout", "-q", "juno/juno-1-test");
         assertTrue(Files.exists(repo.resolve("b.txt")));

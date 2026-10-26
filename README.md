@@ -269,7 +269,7 @@ Juno's rules always take precedence over any skill.
 
 Pull/merge requests are only ever merged by a human, in GitLab/GitHub. This is enforced in three places:
 - **MCP servers.** They only reach an allowlist of endpoints (copy/paste ticket info, open a PR/MR, read
-  review comments, post the AI review summary on a PR/MR, and a read-only repository/branch check). Merge,
+  review comments, post Juno's AI review and conflict resolution summaries on a PR/MR, and a read-only repository/branch check). Merge,
   approve, auto-merge and rebase endpoints are blocked outright.
 - **Agent command line.** Every agent is started with `--disallowedTools` covering `git push`,
   `git merge`/`rebase`, `gh pr merge`/`review`/`close`, `glab mr merge`/`approve`/`close` and the `gh`/`glab`

@@ -175,6 +175,58 @@ public final class PromptBuilder {
         return sb.toString();
     }
 
+    /**
+     * Tells the agent which commands it may run (the agent's and project's allowed tools), so it uses them, for
+     * example installing missing dependencies before building, instead of assuming it can't.
+     */
+    public static String allowedCommands(String allowedTools) {
+        List<String> commands = new java.util.ArrayList<>();
+        for (String rule : splitRules(allowedTools)) {
+            if (rule.startsWith("Bash(") && rule.endsWith(")")) {
+                commands.add("`" + rule.substring(5, rule.length() - 1).replace(":*", " ...") + "`");
+            }
+        }
+        if (commands.isEmpty()) {
+            return "";
+        }
+        return "\n\n## Commands you can run\n"
+                + "These shell commands are pre-approved (`...` means any arguments): " + String.join(", ", commands)
+                + ".\nReading, searching and editing files needs no approval. Any other command is refused "
+                + "automatically, so don't plan around one; if the task really needs it, say so (with the "
+                + StreamJsonParser.DECISION_MARKER + " line if you can't continue without it).\n"
+                + "If the project's dependencies aren't installed yet (for example there's no node_modules folder), "
+                + "install them with an allowed install command first, then build and test.\n";
+    }
+
+    /** Splits "Bash(git status) Bash(npm test:*) Read" into rules, keeping spaces inside parentheses. */
+    static List<String> splitRules(String raw) {
+        List<String> out = new java.util.ArrayList<>();
+        if (raw == null) {
+            return out;
+        }
+        StringBuilder current = new StringBuilder();
+        int depth = 0;
+        for (char c : raw.toCharArray()) {
+            if (c == '(') {
+                depth++;
+            } else if (c == ')') {
+                depth = Math.max(0, depth - 1);
+            }
+            if ((Character.isWhitespace(c) || c == ',') && depth == 0) {
+                if (!current.isEmpty()) {
+                    out.add(current.toString());
+                    current.setLength(0);
+                }
+            } else {
+                current.append(c);
+            }
+        }
+        if (!current.isEmpty()) {
+            out.add(current.toString());
+        }
+        return out;
+    }
+
     /** Another ticket whose work was merged into the base branch and now conflicts with this one. */
     public record MergedTicket(String title, String description, String instructions, String designDoc,
                                String pullRequest) {

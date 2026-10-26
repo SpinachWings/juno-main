@@ -104,7 +104,7 @@ public final class IssueTrackerService implements AutoCloseable {
         return comments;
     }
 
-    /** Posts a comment (the AI review summary) on a pull/merge request. */
+    /** Posts a comment (an AI review or conflict resolution summary) on a pull/merge request. */
     public void commentOnPullRequest(Organisation org, TrackerKind kind, String location, long number, String body)
             throws McpException {
         ObjectNode args = args(kind, location);
