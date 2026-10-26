@@ -1,7 +1,9 @@
 package dev.juno.main.service;
 
 import dev.juno.main.integration.IssueTrackerService;
+import dev.juno.main.integration.McpServers;
 import dev.juno.main.model.JunoSettings;
+import dev.juno.main.model.McpLaunch;
 import dev.juno.main.model.Organisation;
 import dev.juno.main.model.Project;
 import dev.juno.main.model.Ticket;
@@ -57,12 +59,12 @@ class PullRequestTargetTest {
         Project project = new Project();
         project.setRepository(TrackerKind.GITHUB, "acme/web");
         Ticket ticket = new Ticket("a", "t", "");
-        assertEquals(TrackerKind.GITHUB, BoardService.pullRequestTracker(ticket, project, org));
+        assertEquals(TrackerKind.GITHUB, Delivery.pullRequestTracker(ticket, project, org));
 
         project.setRepository(TrackerKind.GITLAB, "acme/web");
-        assertFails(() -> BoardService.pullRequestTracker(ticket, project, org)); // GitLab not enabled
+        assertFails(() -> Delivery.pullRequestTracker(ticket, project, org)); // GitLab not enabled
         project.setRepository(null, "");
-        assertFails(() -> BoardService.pullRequestTracker(ticket, project, org)); // no repository
+        assertFails(() -> Delivery.pullRequestTracker(ticket, project, org)); // no repository
     }
 
     @Test
@@ -85,9 +87,9 @@ class PullRequestTargetTest {
         JunoSettings s = new JunoSettings();
         assertEquals(9950, s.mcpPort(TrackerKind.GITHUB));
         assertEquals(9951, s.mcpPort(TrackerKind.GITLAB));
-        assertEquals(dev.juno.main.model.McpLaunch.JAR, s.mcpLaunch(TrackerKind.GITHUB));
+        assertEquals(McpLaunch.JAR, s.mcpLaunch(TrackerKind.GITHUB));
         assertEquals("http://127.0.0.1:9951/mcp",
-                dev.juno.main.integration.McpServers.endpoint(s, TrackerKind.GITLAB).toString());
+                McpServers.endpoint(s, TrackerKind.GITLAB).toString());
         // Nothing machine-specific is stored by default: blank jars and design doc folder resolve at run time.
         assertEquals("", s.mcpJar(TrackerKind.GITHUB));
         assertEquals("", s.getDesignDocFolder());

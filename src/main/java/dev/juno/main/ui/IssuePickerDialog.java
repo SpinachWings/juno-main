@@ -24,6 +24,7 @@ import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
 import javafx.stage.Window;
 
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -167,7 +168,7 @@ final class IssuePickerDialog extends Dialog<IssuePickerDialog.Selection> {
 
     private void fillProjects(Organisation org, Project preferred) {
         // Only projects hosted on this tracker: a project lives on GitHub or GitLab, never both.
-        project.getItems().setAll(org == null ? java.util.List.of() : settings.projectsIn(org.getId()).stream()
+        project.getItems().setAll(org == null ? List.of() : settings.projectsIn(org.getId()).stream()
                 .filter(p -> p.host() == kind).toList());
         Project select = preferred != null && project.getItems().contains(preferred) ? preferred
                 : project.getItems().size() == 1 ? project.getItems().getFirst() : null;

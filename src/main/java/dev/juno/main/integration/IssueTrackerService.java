@@ -11,10 +11,12 @@ import dev.juno.main.model.PullRequestRef;
 import dev.juno.main.model.TrackerKind;
 import dev.juno.main.model.TrackerSettings;
 
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.function.Supplier;
 
 /**
@@ -27,7 +29,7 @@ public final class IssueTrackerService implements AutoCloseable {
     private record Key(String orgId, TrackerKind kind) {
     }
 
-    private record Connection(McpClient client, java.net.URI endpoint, Map<String, String> headers) {
+    private record Connection(McpClient client, URI endpoint, Map<String, String> headers) {
     }
 
     private final Supplier<JunoSettings> settings;
@@ -129,10 +131,6 @@ public final class IssueTrackerService implements AutoCloseable {
                 r.has("branchExists") ? r.get("branchExists").asBoolean() : null);
     }
 
-    /** Connects to (starting if needed) the tracker's server and returns its tool names; Settings' "Test". */
-    public List<String> test(Organisation org, TrackerKind kind) throws McpException {
-        return client(org, kind).listTools();
-    }
 
     /** Forgets connections (and stops servers Juno started whose port or jar changed) after a settings change. */
     public synchronized void reset() {
@@ -156,7 +154,7 @@ public final class IssueTrackerService implements AutoCloseable {
 
     private McpClient client(Organisation org, TrackerKind kind) throws McpException {
         requireEnabled(org, kind);
-        java.net.URI endpoint = servers.ensure(settings.get(), kind);
+        URI endpoint = servers.ensure(settings.get(), kind);
         Map<String, String> headers = headers(org, kind);
         Key key = new Key(org.getId(), kind);
         synchronized (this) {
@@ -187,7 +185,7 @@ public final class IssueTrackerService implements AutoCloseable {
      */
     public static Map<String, String> headers(Organisation org, TrackerKind kind) {
         TrackerSettings t = org.tracker(kind);
-        Map<String, String> headers = new java.util.TreeMap<>();
+        Map<String, String> headers = new TreeMap<>();
         String token = t.resolvedToken();
         if (token != null && !token.isBlank()) {
             headers.put("Authorization", "Bearer " + token.strip());

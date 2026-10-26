@@ -3,11 +3,13 @@ package dev.juno.main.git;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
@@ -149,6 +151,29 @@ public final class GitWorkspace {
         return null;
     }
 
+    /**
+     * The main repository a linked worktree belongs to, or null if the folder isn't a linked worktree (a main
+     * checkout, or not a git folder at all).
+     */
+    public Path mainRepository(Path worktree) {
+        Result common = run(worktree, LOCAL_TIMEOUT, false, "rev-parse", "--path-format=absolute", "--git-common-dir");
+        Result own = run(worktree, LOCAL_TIMEOUT, false, "rev-parse", "--path-format=absolute", "--git-dir");
+        if (!common.ok() || !own.ok()) {
+            return null;
+        }
+        Path commonDir = Path.of(common.output().strip());
+        if (commonDir.equals(Path.of(own.output().strip())) || commonDir.getParent() == null) {
+            return null;
+        }
+        return commonDir.getParent();
+    }
+
+    /** The branch checked out in a folder, or null (detached or not a repository). */
+    public String currentBranch(Path dir) {
+        Result head = run(dir, LOCAL_TIMEOUT, false, "symbolic-ref", "--quiet", "--short", "HEAD");
+        return head.ok() ? head.output().strip() : null;
+    }
+
     /** Outcome of {@link #release}. */
     public enum Release { RELEASED, HAS_CHANGES, LOCKED }
 
@@ -159,14 +184,26 @@ public final class GitWorkspace {
      * an editor or IDE watching {@code .git}, antivirus), so removal is retried a few times before giving up.
      */
     public Release release(Path repo, Path worktree, String branch) {
+        return release(repo, worktree, branch, true);
+    }
+
+    /**
+     * Removes the worktree even if it has uncommitted changes (used when its ticket is deleted). The branch and
+     * its commits are kept.
+     */
+    public Release discard(Path repo, Path worktree, String branch) {
+        return release(repo, worktree, branch, false);
+    }
+
+    private Release release(Path repo, Path worktree, String branch, boolean keepChanges) {
         if (Files.isDirectory(worktree)) {
             Result status = run(worktree, LOCAL_TIMEOUT, false, "status", "--porcelain");
-            if (!status.ok() || !status.output().isBlank()) {
+            if (keepChanges && (!status.ok() || !status.output().isBlank())) {
                 log.accept("[git] kept the worktree " + worktree + ": it has uncommitted changes");
                 return Release.HAS_CHANGES;
             }
             for (int attempt = 1; attempt <= 5 && Files.isDirectory(worktree); attempt++) {
-                // --force only covers files git ignores (e.g. Juno's skills folder); there are no other changes.
+                // --force: files git ignores (e.g. Juno's skills folder), or the changes of a deleted ticket.
                 if (run(repo, LOCAL_TIMEOUT, false, "worktree", "remove", "--force", worktree.toString()).ok()) {
                     break;
                 }
@@ -274,12 +311,12 @@ public final class GitWorkspace {
             if (!Files.isRegularFile(file)) {
                 continue;
             }
-            try (var lines = Files.lines(file, java.nio.charset.StandardCharsets.ISO_8859_1)) {
+            try (var lines = Files.lines(file, StandardCharsets.ISO_8859_1)) {
                 if (lines.anyMatch(l -> l.startsWith("<<<<<<< ") || l.startsWith(">>>>>>> ") || l.equals("<<<<<<<")
                         || l.equals(">>>>>>>"))) {
                     out.add(f);
                 }
-            } catch (IOException | java.io.UncheckedIOException e) {
+            } catch (IOException | UncheckedIOException e) {
                 // unreadable: let git decide
             }
         }
@@ -314,7 +351,7 @@ public final class GitWorkspace {
     public List<String> changedFiles(Path worktree) {
         Result diff = run(worktree, LOCAL_TIMEOUT, false, "diff", "--name-only", "HEAD");
         Result unmerged = run(worktree, LOCAL_TIMEOUT, false, "diff", "--name-only", "--diff-filter=U");
-        java.util.LinkedHashSet<String> files = new java.util.LinkedHashSet<>();
+        LinkedHashSet<String> files = new LinkedHashSet<>();
         for (Result r : List.of(diff, unmerged)) {
             if (r.ok()) {
                 r.output().lines().map(String::strip).filter(l -> !l.isEmpty()).forEach(files::add);

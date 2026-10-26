@@ -22,6 +22,7 @@ import java.util.Collections;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -153,7 +154,7 @@ public final class McpServers implements AutoCloseable {
         if (own != null && own.process().isAlive()) {
             own.process().destroy();
             try {
-                own.process().waitFor(3, java.util.concurrent.TimeUnit.SECONDS);
+                own.process().waitFor(3, TimeUnit.SECONDS);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }

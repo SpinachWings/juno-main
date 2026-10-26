@@ -39,9 +39,8 @@ class JunoStoreTest {
         var board = store.loadBoard();
         var t = new Ticket("JUNO-1", "Title", "Body\nwith lines");
         t.setStatus(TicketStatus.AWAITING_DECISION);
-        t.setRef(TrackerKind.GITHUB, new ExternalRef("octo/repo", 12, "https://github.com/octo/repo/issues/12", "now"));
+        t.setIssue(new ExternalRef(TrackerKind.GITHUB, "octo/repo", 12, "https://github.com/octo/repo/issues/12", "now"));
         board.getTickets().add(t);
-        board.setNextTicketNumber(2);
         store.saveBoard(board);
 
         var settings = JunoSettings.createDefault();
@@ -61,9 +60,8 @@ class JunoStoreTest {
         var loaded = reopened.loadBoard().getTickets().getFirst();
         assertEquals("Body\nwith lines", loaded.getDescription());
         assertEquals(TicketStatus.AWAITING_DECISION, loaded.getStatus());
-        assertEquals(12, loaded.getRef(TrackerKind.GITHUB).number());
-        assertNull(loaded.getRef(TrackerKind.GITLAB));
-        assertEquals(2, reopened.loadBoard().getNextTicketNumber());
+        assertEquals(12, loaded.getIssue().number());
+        assertEquals(TrackerKind.GITHUB, loaded.getIssue().tracker());
 
         var s = reopened.loadSettings();
         assertEquals("claude-haiku-5-5", s.getAgentProfiles().getFirst().getModel());
@@ -78,18 +76,36 @@ class JunoStoreTest {
     }
 
     @Test
+    void rotatesLongLogsAndDeletesThem() throws Exception {
+        var store = new JunoStore(home);
+        String line = "x".repeat(1023);
+        for (int i = 0; i <= JunoStore.MAX_LOG_BYTES / 1024 + 1; i++) {
+            store.appendLog("t1", line);
+        }
+        store.appendLog("t1", "after rotation");
+        assertTrue(Files.exists(home.resolve("logs/t1.1.log")));
+        assertTrue(Files.size(store.logFile("t1")) < 1024 * 4);
+        store.deleteLogs("t1");
+        assertFalse(Files.exists(store.logFile("t1")));
+        assertFalse(Files.exists(home.resolve("logs/t1.1.log")));
+    }
+
+    @Test
     void migratesOldReviewColumns() throws Exception {
         Files.writeString(home.resolve("board.json"), """
                 {"nextTicketNumber": 4, "tickets": [
                   {"id": "JUNO-1", "title": "a", "status": "AI_REVIEW"},
                   {"id": "JUNO-2", "title": "b", "status": "HUMAN_REVIEW"},
-                  {"id": "JUNO-3", "title": "c", "status": "DONE"}]}
+                  {"id": "JUNO-3", "title": "c", "status": "DONE",
+                   "gitlab": {"location": "acme/web", "number": 5, "url": "u", "syncedAt": "s"}}]}
                 """);
         var tickets = new JunoStore(home).loadBoard().getTickets();
         assertEquals(TicketStatus.REVIEW, tickets.get(0).getStatus());
         assertEquals(TicketStatus.REVIEW, tickets.get(1).getStatus());
         assertEquals(TicketStatus.DONE, tickets.get(2).getStatus());
-        assertTrue(Files.exists(home.resolve("board.pre-review-columns.json")));
+        assertEquals(TrackerKind.GITLAB, tickets.get(2).getIssue().tracker()); // one issue link per ticket
+        assertEquals(5, tickets.get(2).getIssue().number());
+        assertTrue(Files.exists(home.resolve("board.pre-migration.json")));
     }
 
     @Test
@@ -120,7 +136,6 @@ class JunoStoreTest {
         AgentProfile agent = s.getAgentProfiles().getFirst();
         assertEquals("claude-opus-5-5", agent.getModel());
         assertEquals(40, agent.getMaxTurns());
-        assertTrue(agent.isExposeTrackerMcp());
         assertEquals(agent.getId(), org.getAgentProfileId());
         assertEquals(5, s.getMaxConcurrentAgents());
 

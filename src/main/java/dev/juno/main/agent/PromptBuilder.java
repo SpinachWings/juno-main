@@ -6,9 +6,12 @@ import dev.juno.main.model.Project;
 import dev.juno.main.model.PullRequestRef;
 import dev.juno.main.model.RunKind;
 import dev.juno.main.model.Ticket;
-import dev.juno.main.model.TrackerKind;
 
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 /** Builds the prompts handed to agents. */
 public final class PromptBuilder {
@@ -16,7 +19,7 @@ public final class PromptBuilder {
     private PromptBuilder() {
     }
 
-    public static String initial(Ticket ticket, Project project, boolean trackerToolsAvailable) {
+    public static String initial(Ticket ticket, Project project) {
         StringBuilder sb = new StringBuilder();
         sb.append("You are an autonomous software engineer working on a ticket in the ").append(project.getName())
                 .append(" repository (your current working directory).\n\n");
@@ -35,21 +38,10 @@ public final class PromptBuilder {
                     .append(ticket.getDesignDoc().strip()).append("\n\n");
         }
 
-        StringBuilder links = new StringBuilder();
-        for (TrackerKind kind : TrackerKind.values()) {
-            ExternalRef ref = ticket.getRef(kind);
-            if (ref != null) {
-                links.append("- ").append(kind.displayName()).append(" issue ").append(ref.display())
-                        .append(ref.url() == null || ref.url().isBlank() ? "" : " (" + ref.url() + ")").append('\n');
-            }
-        }
-        if (!links.isEmpty()) {
-            sb.append("## Linked issues\n").append(links);
-            if (trackerToolsAvailable) {
-                sb.append("You can read these issues (including comments) with the juno-gitlab / juno-github "
-                        + "MCP tools if you need more context.\n");
-            }
-            sb.append('\n');
+        ExternalRef ref = ticket.getIssue();
+        if (ref != null) {
+            sb.append("## Linked issue\n").append(ref.tracker().displayName()).append(" issue ").append(ref.display())
+                    .append(ref.url() == null || ref.url().isBlank() ? "" : " (" + ref.url() + ")").append("\n\n");
         }
 
         sb.append(rules(ticket));
@@ -57,7 +49,7 @@ public final class PromptBuilder {
     }
 
     /** Design run: a conversation with the human that ends in an approved design doc; no code changes. */
-    public static String design(Ticket ticket, Project project, boolean trackerToolsAvailable) {
+    public static String design(Ticket ticket, Project project) {
         StringBuilder sb = new StringBuilder();
         sb.append("You are a senior software engineer writing a design doc for a ticket in the ").append(project.getName())
                 .append(" repository (your current working directory), together with a human.\n\n");
@@ -122,7 +114,7 @@ public final class PromptBuilder {
      * @param newSince     comments created after this instant are marked new (null = all new)
      */
     public static String review(Ticket ticket, Project project, List<ReviewComment> comments,
-                                java.time.Instant newSince) {
+                                Instant newSince) {
         PullRequestRef pr = ticket.getPullRequest();
         StringBuilder sb = new StringBuilder();
         sb.append("You are an autonomous software engineer addressing review feedback on ")
@@ -190,7 +182,7 @@ public final class PromptBuilder {
      * example installing missing dependencies before building, instead of assuming it can't.
      */
     public static String allowedCommands(String allowedTools) {
-        List<String> commands = new java.util.ArrayList<>();
+        List<String> commands = new ArrayList<>();
         for (String rule : splitRules(allowedTools)) {
             if (rule.startsWith("Bash(") && rule.endsWith(")")) {
                 commands.add("`" + rule.substring(5, rule.length() - 1).replace(":*", " ...") + "`");
@@ -210,7 +202,7 @@ public final class PromptBuilder {
 
     /** Splits "Bash(git status) Bash(npm test:*) Read" into rules, keeping spaces inside parentheses. */
     static List<String> splitRules(String raw) {
-        List<String> out = new java.util.ArrayList<>();
+        List<String> out = new ArrayList<>();
         if (raw == null) {
             return out;
         }
@@ -381,11 +373,11 @@ public final class PromptBuilder {
                 ticket.getBranchName(), gitState);
     }
 
-    private static java.util.Optional<java.time.Instant> parse(String iso) {
+    private static Optional<Instant> parse(String iso) {
         try {
-            return java.util.Optional.of(java.time.OffsetDateTime.parse(iso).toInstant());
+            return Optional.of(OffsetDateTime.parse(iso).toInstant());
         } catch (RuntimeException e) {
-            return java.util.Optional.empty();
+            return Optional.empty();
         }
     }
 

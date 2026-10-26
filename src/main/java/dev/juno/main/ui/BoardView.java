@@ -1,12 +1,18 @@
 package dev.juno.main.ui;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import dev.juno.main.model.JunoSettings;
 import dev.juno.main.model.Organisation;
 import dev.juno.main.model.Project;
+import dev.juno.main.model.RunKind;
 import dev.juno.main.model.Ticket;
 import dev.juno.main.model.TicketStatus;
 import dev.juno.main.model.TrackerKind;
 import dev.juno.main.service.BoardService;
+import javafx.animation.Animation;
+import javafx.animation.KeyFrame;
+import javafx.animation.PauseTransition;
+import javafx.animation.Timeline;
 import javafx.application.HostServices;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -25,12 +31,17 @@ import javafx.scene.layout.Pane;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
 import javafx.stage.Window;
+import javafx.util.Duration;
 
 import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /** Main window content: toolbar plus one column per {@link TicketStatus}. */
 public final class BoardView {
@@ -55,6 +66,13 @@ public final class BoardView {
     private final ComboBox<FilterItem> projectFilter = new ComboBox<>();
     private final Label agentsLabel = new Label();
     private boolean updatingFilter;
+    /** Cards by ticket id, with the state they show; a card is only rebuilt when that state changes. */
+    private final Map<String, CardEntry> cards = new HashMap<>();
+    /** Coalesces bursts of board changes into at most one redraw per 200 ms. */
+    private final PauseTransition refreshDelay = new PauseTransition(Duration.millis(200));
+
+    private record CardEntry(String state, Node node) {
+    }
 
     public BoardView(BoardService service, HostServices hostServices) {
         this.service = service;
@@ -62,7 +80,12 @@ public final class BoardView {
         root.getStyleClass().add("board-root");
         root.setTop(buildToolbar());
         root.setCenter(buildColumns());
-        service.addChangeListener(() -> Fx.runLater(this::refresh));
+        refreshDelay.setOnFinished(e -> refresh());
+        service.addChangeListener(() -> Fx.runLater(this::scheduleRefresh));
+        // Some things on a card change without a board event (a terminal closing, an agent process ending).
+        Timeline poll = new Timeline(new KeyFrame(Duration.seconds(2), e -> scheduleRefresh()));
+        poll.setCycleCount(Animation.INDEFINITE);
+        poll.play();
         refresh();
     }
 
@@ -119,7 +142,7 @@ public final class BoardView {
         columns.setPadding(new Insets(12));
         columns.getStyleClass().add("columns");
         for (TicketStatus status : TicketStatus.values()) {
-            Label name = new Label(status.label().toUpperCase(java.util.Locale.ROOT));
+            Label name = new Label(status.label().toUpperCase(Locale.ROOT));
             name.getStyleClass().add("column-title");
             Label count = new Label("0");
             count.getStyleClass().add("column-count");
@@ -156,32 +179,67 @@ public final class BoardView {
 
     // ---- refresh ----------------------------------------------------------------------------
 
+    /** Redraws soon (FX thread), merging further changes that arrive meanwhile. */
+    private void scheduleRefresh() {
+        if (refreshDelay.getStatus() != Animation.Status.RUNNING) {
+            refreshDelay.playFromStart();
+        }
+    }
+
+    /** Redraws the board from snapshots, rebuilding only the cards whose state changed. */
     private void refresh() {
         updateFilters();
         String orgId = selectedOrgId();
         String projectId = selectedProjectId();
         TicketCard.Actions actions = cardActions();
+        Set<String> seen = new HashSet<>();
         for (TicketStatus status : TicketStatus.values()) {
-            VBox body = columnBodies.get(status);
-            body.getChildren().clear();
-            int count = 0;
+            List<Node> nodes = new ArrayList<>();
             for (Ticket t : service.column(status)) {
                 if (!visible(t, orgId, projectId)) {
                     continue;
                 }
-                body.getChildren().add(TicketCard.create(t, service, actions, hostServices));
-                count++;
+                seen.add(t.getId());
+                String state = cardState(t);
+                CardEntry entry = cards.get(t.getId());
+                if (entry == null || !entry.state().equals(state)) {
+                    entry = new CardEntry(state, TicketCard.create(t, service, actions, hostServices));
+                    cards.put(t.getId(), entry);
+                }
+                nodes.add(entry.node());
             }
+            int count = nodes.size();
             if (count == 0) {
                 Label empty = new Label(status == TicketStatus.PENDING ? "No tickets yet.\nCreate or import one." : "—");
                 empty.getStyleClass().add("column-empty");
-                body.getChildren().add(empty);
+                nodes.add(empty);
+            }
+            VBox body = columnBodies.get(status);
+            if (!body.getChildren().equals(nodes)) {
+                body.getChildren().setAll(nodes);
             }
             columnCounts.get(status).setText(Integer.toString(count));
         }
+        cards.keySet().retainAll(seen);
         int running = service.runningAgents();
         agentsLabel.setText(running == 0 ? "No agents running" : running + " agent(s) running");
         agentsLabel.getStyleClass().setAll("label", running == 0 ? "agents-idle" : "agents-busy");
+    }
+
+    /** Everything a card shows: the ticket itself, what's running, and its project, organisation and agent. */
+    private String cardState(Ticket t) {
+        String id = t.getId();
+        String json;
+        try {
+            json = service.store().mapper().writeValueAsString(t);
+        } catch (JsonProcessingException e) {
+            json = t.getUpdatedAt() + t.getStatus();
+        }
+        String project = service.projectOf(t).map(p -> p.getName() + p.getColor() + p.host()).orElse("");
+        String org = service.organisationOf(t).map(Organisation::getName).orElse("");
+        String agent = service.agentFor(t).map(a -> a.describe()).orElse("");
+        return json + '|' + service.isAgentRunning(id) + service.isOpeningPullRequest(id) + service.isPreparing(id)
+                + service.isTerminalOpen(id) + '|' + project + '|' + org + '|' + agent;
     }
 
     private boolean visible(Ticket t, String orgId, String projectId) {
@@ -309,9 +367,9 @@ public final class BoardView {
 
             @Override
             public void stop(Ticket t, Window owner) {
-                dev.juno.main.model.RunKind kind = t.getRunKind();
-                boolean conflicts = kind == dev.juno.main.model.RunKind.CONFLICTS;
-                if (Fx.confirm(owner, "Stop agent?", "Stop the " + (kind == dev.juno.main.model.RunKind.REVIEW
+                RunKind kind = t.getRunKind();
+                boolean conflicts = kind == RunKind.CONFLICTS;
+                if (Fx.confirm(owner, "Stop agent?", "Stop the " + (kind == RunKind.REVIEW
                         ? "AI review agent" : conflicts ? "conflict-resolving agent" : "agent")
                         + " working on " + name(t) + "? The ticket goes back to " + kind.homeStatus().label()
                         + (conflicts ? "; the unfinished merge is abandoned and the branch is left as it was."
@@ -420,7 +478,9 @@ public final class BoardView {
             @Override
             public void delete(Ticket t, Window owner) {
                 if (Fx.confirm(owner, "Delete " + name(t) + "?",
-                        "This removes the ticket from Juno only; linked GitLab/GitHub issues are not touched.")) {
+                        "This removes the ticket from Juno, with its working copy (including any uncommitted "
+                                + "changes) and its agent logs. Its branch, pull request and linked issue on "
+                                + "GitHub/GitLab are kept.")) {
                     service.deleteTicket(t.getId());
                 }
             }

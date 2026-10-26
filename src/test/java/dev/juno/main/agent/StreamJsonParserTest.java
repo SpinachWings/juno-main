@@ -3,7 +3,6 @@ package dev.juno.main.agent;
 import dev.juno.main.model.AgentProfile;
 import org.junit.jupiter.api.Test;
 
-import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -66,18 +65,18 @@ class StreamJsonParserTest {
         s.setMaxTurns(30);
         s.setAllowedTools("Bash(mvn test:*)");
         s.setExtraArgs("--add-dir \"C:\\My Docs\"");
-        List<String> cmd = AgentRunner.buildCommand(s, "sess", Path.of("mcp.json"), false);
+        List<String> cmd = AgentRunner.buildCommand(s, "sess", false);
         assertEquals(List.of("claude", "-p", "--output-format", "stream-json", "--verbose",
                 "--model", "claude-opus-5-5", "--permission-mode", "acceptEdits", "--max-turns", "30",
-                "--allowedTools", "Bash(mvn test:*)", "--mcp-config", "mcp.json", "--resume", "sess",
+                "--allowedTools", "Bash(mvn test:*)", "--resume", "sess",
                 "--disallowedTools", String.join(" ", AgentRunner.FORBIDDEN_TOOLS),
                 "--add-dir", "C:\\My Docs"), cmd);
         assertTrue(AgentRunner.FORBIDDEN_TOOLS.contains("Bash(gh pr merge:*)"));
         assertTrue(AgentRunner.FORBIDDEN_TOOLS.contains("Bash(glab mr merge:*)"));
 
-        List<String> windows = AgentRunner.buildCommand(s, null, null, true);
+        List<String> windows = AgentRunner.buildCommand(s, null, true);
         assertEquals(List.of("cmd.exe", "/c", "claude"), windows.subList(0, 3));
         s.setCliPath("C:\\tools\\claude.exe");
-        assertEquals("C:\\tools\\claude.exe", AgentRunner.buildCommand(s, null, null, true).getFirst());
+        assertEquals("C:\\tools\\claude.exe", AgentRunner.buildCommand(s, null, true).getFirst());
     }
 }

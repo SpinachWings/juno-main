@@ -12,8 +12,6 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -64,14 +62,6 @@ public final class McpClient {
 
     public String serverName() {
         return serverName;
-    }
-
-    public List<String> listTools() throws McpException {
-        List<String> names = new ArrayList<>();
-        for (JsonNode tool : request("tools/list", mapper.createObjectNode(), DEFAULT_TIMEOUT).path("tools")) {
-            names.add(tool.path("name").asText());
-        }
-        return names;
     }
 
     /**

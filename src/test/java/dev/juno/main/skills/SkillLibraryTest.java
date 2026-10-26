@@ -8,6 +8,7 @@ import dev.juno.main.model.SkillScope;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -68,7 +69,7 @@ class SkillLibraryTest {
         boolean refused = false;
         try {
             lib.importSkill(evil, SkillScope.GLOBAL, null);
-        } catch (java.io.IOException e) {
+        } catch (IOException e) {
             refused = e.getMessage().contains("Unsafe path");
         }
         assertTrue(refused);
@@ -78,7 +79,7 @@ class SkillLibraryTest {
         boolean rejected = false;
         try {
             lib.importSkill(notSkill, SkillScope.GLOBAL, null);
-        } catch (java.io.IOException e) {
+        } catch (IOException e) {
             rejected = e.getMessage().contains("No SKILL.md");
         }
         assertTrue(rejected);

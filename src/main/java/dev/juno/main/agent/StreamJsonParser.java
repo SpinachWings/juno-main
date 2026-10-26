@@ -108,7 +108,10 @@ public final class StreamJsonParser {
         }
         if (!resultSeen || resultIsError || exitCode != 0) {
             String why;
-            if (resultSeen && resultIsError) {
+            if (resultSeen && "error_max_turns".equals(resultSubtype)) {
+                why = "The agent used all its turns (the agent's Max turns in Settings → Agents) before finishing. "
+                        + "Reply to let it continue where it stopped.";
+            } else if (resultSeen && resultIsError) {
                 why = "Agent run ended with '" + resultSubtype + "'"
                         + (resultText == null || resultText.isBlank() ? "" : ": " + resultText);
             } else {

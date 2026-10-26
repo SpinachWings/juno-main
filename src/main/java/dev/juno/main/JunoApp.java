@@ -13,6 +13,7 @@ import javafx.stage.Stage;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.List;
 import java.util.Objects;
 
 /** Juno: a kanban-style orchestrator for Claude Code agents working on development tickets. */
@@ -59,7 +60,7 @@ public final class JunoApp extends Application {
             }
         });
         stage.show();
-        java.util.List<String> notes = service.store().settingsNotes();
+        List<String> notes = service.store().settingsNotes();
         if (!notes.isEmpty()) {
             Fx.info(stage, "Settings updated", String.join("\n", notes)
                     + "\n\nA backup of the previous settings is in settings.pre-single-host.json.");

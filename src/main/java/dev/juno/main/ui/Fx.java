@@ -5,6 +5,7 @@ import javafx.scene.control.Alert;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.TextArea;
+import javafx.scene.layout.Region;
 import javafx.scene.paint.Color;
 import javafx.stage.Window;
 
@@ -66,7 +67,7 @@ public final class Fx {
         text.setPrefRowCount(Math.min(24, Math.max(8, lines + 2)));
         alert.getDialogPane().setContent(text);
         alert.getDialogPane().setPrefWidth(760);
-        alert.getDialogPane().setMinHeight(javafx.scene.layout.Region.USE_PREF_SIZE);
+        alert.getDialogPane().setMinHeight(Region.USE_PREF_SIZE);
         alert.showAndWait();
     }
 

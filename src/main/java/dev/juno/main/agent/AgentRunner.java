@@ -10,6 +10,8 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -17,6 +19,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Runs Claude Code agents as child processes, one per ticket, in headless mode with streamed JSON output.
@@ -41,16 +44,17 @@ public final class AgentRunner {
      * @param prompt          prompt sent on stdin
      * @param resumeSessionId session to continue, or null for a fresh session
      * @param settings        snapshot of the effective agent profile (allowed tools already merged)
-     * @param mcpConfig       optional {@code --mcp-config} file, or null
      * @param agentLabel      human description of the agent and where it was assigned, for the log
      */
     public record Request(String ticketId, Path workDir, String prompt, String resumeSessionId,
-                          AgentProfile settings, Path mcpConfig, String agentLabel) {
+                          AgentProfile settings, String agentLabel) {
     }
 
     private static final class Run {
         final Process process;
         volatile boolean cancelled;
+        /** Stopped by Juno because it ran longer than the agent's time limit. */
+        volatile boolean timedOut;
 
         Run(Process process) {
             this.process = process;
@@ -81,7 +85,7 @@ public final class AgentRunner {
         if (!Files.isDirectory(request.workDir())) {
             throw new IOException("Project directory does not exist: " + request.workDir());
         }
-        List<String> command = buildCommand(request.settings(), request.resumeSessionId(), request.mcpConfig(),
+        List<String> command = buildCommand(request.settings(), request.resumeSessionId(),
                 isWindows());
         ProcessBuilder pb = new ProcessBuilder(command).directory(request.workDir().toFile());
         AgentProfile s = request.settings();
@@ -109,6 +113,19 @@ public final class AgentRunner {
         runs.put(request.ticketId(), run);
 
         Thread.ofPlatform().daemon().name("agent-" + request.ticketId()).start(() -> supervise(request, run));
+        int minutes = s.getMaxMinutes();
+        Thread.ofVirtual().name("agent-limit-" + request.ticketId()).start(() -> {
+            try {
+                if (!process.waitFor(minutes, TimeUnit.MINUTES) && runs.get(request.ticketId()) == run) {
+                    run.timedOut = true;
+                    listener.log(request.ticketId(), "[juno] stopping the agent: it reached its " + minutes
+                            + "-minute time limit");
+                    kill(run.process);
+                }
+            } catch (InterruptedException ignored) {
+                // Juno is closing
+            }
+        });
         return process.pid();
     }
 
@@ -169,9 +186,17 @@ public final class AgentRunner {
         if (shuttingDown) {
             return;
         }
-        AgentOutcome outcome = parser.outcome(exit, run.cancelled, tail);
+        AgentOutcome outcome = run.timedOut
+                ? new AgentOutcome(AgentOutcome.Kind.FAILED, parser.sessionId(), "it was stopped after "
+                        + minutes(request.settings().getMaxMinutes()) + " (the agent's time limit in Settings → "
+                        + "Agents). Its work so far is in its worktree; reply to let it continue where it stopped.", -1)
+                : parser.outcome(exit, run.cancelled, tail);
         listener.log(ticketId, "=== Agent finished: " + outcome.kind() + " ===");
         listener.finished(ticketId, outcome);
+    }
+
+    private static String minutes(int n) {
+        return n == 1 ? "1 minute" : n + " minutes";
     }
 
     /** Stops a running agent (and any processes it spawned). */
@@ -196,12 +221,12 @@ public final class AgentRunner {
      *
      * @return true if a process was stopped
      */
-    public static boolean killOrphan(long pid, java.time.Instant runStartedAt) {
+    public static boolean killOrphan(long pid, Instant runStartedAt) {
         if (pid <= 0 || runStartedAt == null) {
             return false;
         }
         return ProcessHandle.of(pid).filter(ProcessHandle::isAlive).filter(h -> h.info().startInstant()
-                .map(start -> java.time.Duration.between(runStartedAt, start).abs().toMinutes() < 2)
+                .map(start -> Duration.between(runStartedAt, start).abs().toMinutes() < 2)
                 .orElse(false)).map(h -> {
                     h.descendants().forEach(ProcessHandle::destroy);
                     h.destroy();
@@ -225,8 +250,7 @@ public final class AgentRunner {
             "Bash(gh pr merge:*)", "Bash(gh pr review:*)", "Bash(gh pr close:*)", "Bash(gh api:*)",
             "Bash(glab mr merge:*)", "Bash(glab mr approve:*)", "Bash(glab mr close:*)", "Bash(glab api:*)");
 
-    public static List<String> buildCommand(AgentProfile s, String resumeSessionId, Path mcpConfig,
-                                            boolean windows) {
+    public static List<String> buildCommand(AgentProfile s, String resumeSessionId, boolean windows) {
         List<String> cmd = new ArrayList<>();
         String cli = notBlank(s.getCliPath()) ? s.getCliPath().trim() : "claude";
         // npm-installed CLIs on Windows are .cmd shims that ProcessBuilder cannot launch directly.
@@ -247,17 +271,11 @@ public final class AgentRunner {
             cmd.add("--permission-mode");
             cmd.add(s.getPermissionMode().trim());
         }
-        if (s.getMaxTurns() > 0) {
-            cmd.add("--max-turns");
-            cmd.add(Integer.toString(s.getMaxTurns()));
-        }
+        cmd.add("--max-turns");
+        cmd.add(Integer.toString(s.getMaxTurns()));
         if (notBlank(s.getAllowedTools())) {
             cmd.add("--allowedTools");
             cmd.add(s.getAllowedTools().trim());
-        }
-        if (mcpConfig != null) {
-            cmd.add("--mcp-config");
-            cmd.add(mcpConfig.toString());
         }
         if (notBlank(resumeSessionId)) {
             cmd.add("--resume");

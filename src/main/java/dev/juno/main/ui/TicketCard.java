@@ -29,7 +29,9 @@ import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.stage.Window;
 
+import java.util.Locale;
 import java.util.Optional;
+import java.util.function.Consumer;
 
 /** Builds the card shown for a ticket in a board column. */
 final class TicketCard {
@@ -107,23 +109,17 @@ final class TicketCard {
                 .orElse("No agent on the ticket, its project or its organisation")));
         card.getChildren().add(agentLabel);
 
-        FlowPane links = new FlowPane(6, 2);
-        for (TrackerKind kind : TrackerKind.values()) {
-            ExternalRef ref = ticket.getRef(kind);
-            if (ref != null) {
-                Hyperlink link = new Hyperlink(kind.shortName() + " " + ref.display());
-                link.getStyleClass().addAll("card-link", "card-link-" + kind.name().toLowerCase());
-                link.setTooltip(new Tooltip(ref.url()));
-                link.setOnAction(e -> {
-                    if (ref.url() != null && !ref.url().isBlank()) {
-                        hostServices.showDocument(ref.url());
-                    }
-                });
-                links.getChildren().add(link);
-            }
-        }
-        if (!links.getChildren().isEmpty()) {
-            card.getChildren().add(links);
+        ExternalRef ref = ticket.getIssue();
+        if (ref != null) {
+            Hyperlink link = new Hyperlink(ref.tracker().shortName() + " " + ref.display());
+            link.getStyleClass().addAll("card-link", "card-link-" + ref.tracker().name().toLowerCase(Locale.ROOT));
+            link.setTooltip(new Tooltip(ref.url()));
+            link.setOnAction(e -> {
+                if (ref.url() != null && !ref.url().isBlank()) {
+                    hostServices.showDocument(ref.url());
+                }
+            });
+            card.getChildren().add(link);
         }
 
         boolean running = service.isAgentRunning(ticket.getId());
@@ -373,7 +369,7 @@ final class TicketCard {
         return button("Log", "Show the agent's activity log", b -> actions.log(ticket, b.getScene().getWindow()));
     }
 
-    private static Button button(String text, String tooltip, java.util.function.Consumer<Button> onClick) {
+    private static Button button(String text, String tooltip, Consumer<Button> onClick) {
         Button b = new Button(text);
         b.setTooltip(new Tooltip(tooltip));
         b.setOnAction(e -> onClick.accept(b));

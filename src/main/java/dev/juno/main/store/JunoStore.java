@@ -19,7 +19,10 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
+import java.util.function.Supplier;
 
 /**
  * File-based persistence under {@code ~/.juno} (override with the {@code JUNO_HOME} environment variable):
@@ -29,16 +32,7 @@ public final class JunoStore {
 
     /** On-disk shape of the board. */
     public static final class BoardData {
-        private int nextTicketNumber = 1;
         private List<Ticket> tickets = new ArrayList<>();
-
-        public int getNextTicketNumber() {
-            return nextTicketNumber;
-        }
-
-        public void setNextTicketNumber(int nextTicketNumber) {
-            this.nextTicketNumber = nextTicketNumber;
-        }
 
         public List<Ticket> getTickets() {
             return tickets;
@@ -137,7 +131,7 @@ public final class JunoStore {
         try {
             JsonNode tree = mapper.readTree(file.toFile());
             if (migrateBoard(tree)) {
-                Files.copy(file, file.resolveSibling("board.pre-review-columns.json"),
+                Files.copy(file, file.resolveSibling("board.pre-migration.json"),
                         StandardCopyOption.REPLACE_EXISTING);
             }
             return mapper.treeToValue(tree, BoardData.class);
@@ -150,11 +144,33 @@ public final class JunoStore {
     static boolean migrateBoard(JsonNode tree) {
         boolean changed = false;
         for (JsonNode ticket : tree.path("tickets")) {
+            if (!(ticket instanceof ObjectNode o)) {
+                continue;
+            }
             String status = ticket.path("status").asText("");
-            if ((status.equals("AI_REVIEW") || status.equals("HUMAN_REVIEW")) && ticket instanceof ObjectNode o) {
+            if (status.equals("AI_REVIEW") || status.equals("HUMAN_REVIEW")) {
                 o.put("status", "REVIEW");
                 changed = true;
             }
+            // One issue link per ticket (projects live on one host): the separate GitHub / GitLab links merge.
+            if (o.has("github") || o.has("gitlab")) {
+                if (!o.hasNonNull("issue")) {
+                    for (String kind : new String[] {"github", "gitlab"}) {
+                        if (o.get(kind) instanceof ObjectNode ref) {
+                            ref.put("tracker", kind.toUpperCase(Locale.ROOT));
+                            o.set("issue", ref);
+                            break;
+                        }
+                    }
+                }
+                o.remove("github");
+                o.remove("gitlab");
+                changed = true;
+            }
+        }
+        if (tree instanceof ObjectNode root && root.has("nextTicketNumber")) {
+            root.remove("nextTicketNumber"); // tickets have no numbers any more
+            changed = true;
         }
         return changed;
     }
@@ -177,13 +193,48 @@ public final class JunoStore {
         return home.resolve("runs").resolve(ticketId.replaceAll("[^A-Za-z0-9_.-]", "_"));
     }
 
+    /** Deletes a file or folder tree under Juno's home; best effort (returns false if anything remained). */
+    public boolean deleteTree(Path path) {
+        if (!path.toAbsolutePath().normalize().startsWith(home.toAbsolutePath().normalize()) || !Files.exists(path)) {
+            return !Files.exists(path);
+        }
+        try (var walk = Files.walk(path)) {
+            walk.sorted(Comparator.reverseOrder()).forEach(p -> {
+                try {
+                    p.toFile().setWritable(true);
+                    Files.deleteIfExists(p);
+                } catch (IOException e) {
+                    // keep going; reported by the return value
+                }
+            });
+        } catch (IOException | UncheckedIOException e) {
+            return false;
+        }
+        return !Files.exists(path);
+    }
+
+    /** Deletes a ticket's log and its rotated copy. */
+    public void deleteLogs(String ticketId) {
+        Path log = logFile(ticketId);
+        deleteTree(log);
+        deleteTree(log.resolveSibling(log.getFileName().toString().replaceFirst("\\.log$", ".1.log")));
+    }
+
     public Path logFile(String ticketId) {
         return home.resolve("logs").resolve(ticketId.replaceAll("[^A-Za-z0-9_.-]", "_") + ".log");
     }
 
+    /** Above this size a ticket's log is rotated: the current one becomes {@code <ticket>.1.log}. */
+    static final long MAX_LOG_BYTES = 5L * 1024 * 1024;
+
     public void appendLog(String ticketId, String line) {
         try {
-            Files.writeString(logFile(ticketId), line + System.lineSeparator(), StandardCharsets.UTF_8,
+            Path log = logFile(ticketId);
+            if (Files.exists(log) && Files.size(log) > MAX_LOG_BYTES) {
+                Files.move(log, log.resolveSibling(log.getFileName().toString().replaceFirst("\\.log$", ".1.log")),
+                        StandardCopyOption.REPLACE_EXISTING);
+            }
+            Files.writeString(log, line + System.lineSeparator(), StandardCharsets.UTF_8,
                     StandardOpenOption.CREATE, StandardOpenOption.APPEND);
         } catch (IOException e) {
             System.err.println("Could not write log for " + ticketId + ": " + e.getMessage());
@@ -199,7 +250,7 @@ public final class JunoStore {
         }
     }
 
-    private <T> T read(Path file, Class<T> type, java.util.function.Supplier<T> fallback) {
+    private <T> T read(Path file, Class<T> type, Supplier<T> fallback) {
         if (!Files.exists(file)) {
             return fallback.get();
         }

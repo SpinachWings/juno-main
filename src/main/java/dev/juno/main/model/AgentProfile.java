@@ -27,16 +27,18 @@ public final class AgentProfile {
     private String permissionMode = "acceptEdits";
     /** Space- or comma-separated tool rules passed to {@code --allowedTools}, e.g. {@code Bash(mvn test:*)}. */
     private String allowedTools = "";
-    /** 0 means no limit. */
-    private int maxTurns = 0;
+    public static final int DEFAULT_MAX_TURNS = 150;
+    public static final int DEFAULT_MAX_MINUTES = 60;
+    /** Turns before a run stops (Claude Code's {@code --max-turns}); caps runaway runs and their cost. */
+    private int maxTurns = DEFAULT_MAX_TURNS;
+    /** Minutes before Juno stops a run that is still going. */
+    private int maxMinutes = DEFAULT_MAX_MINUTES;
     /** Optional API key (or {@code env:VAR}); when blank the CLI's own login / environment is used. */
     private String apiKey = "";
     /** Optional {@code ANTHROPIC_BASE_URL}, e.g. for a gateway or proxy instance. */
     private String baseUrl = "";
     /** Additional raw CLI arguments, whitespace separated. */
     private String extraArgs = "";
-    /** Give agents their organisation's GitLab/GitHub MCP servers so they can read and comment on issues. */
-    private boolean exposeTrackerMcp = false;
 
     public AgentProfile() {
     }
@@ -89,8 +91,17 @@ public final class AgentProfile {
         this.allowedTools = allowedTools;
     }
 
+    /** Always a limit: profiles saved with 0 ("no limit") by earlier versions get the default. */
     public int getMaxTurns() {
-        return maxTurns;
+        return maxTurns > 0 ? maxTurns : DEFAULT_MAX_TURNS;
+    }
+
+    public int getMaxMinutes() {
+        return maxMinutes > 0 ? maxMinutes : DEFAULT_MAX_MINUTES;
+    }
+
+    public void setMaxMinutes(int maxMinutes) {
+        this.maxMinutes = maxMinutes;
     }
 
     public void setMaxTurns(int maxTurns) {
@@ -121,13 +132,7 @@ public final class AgentProfile {
         this.extraArgs = extraArgs;
     }
 
-    public boolean isExposeTrackerMcp() {
-        return exposeTrackerMcp;
-    }
 
-    public void setExposeTrackerMcp(boolean exposeTrackerMcp) {
-        this.exposeTrackerMcp = exposeTrackerMcp;
-    }
 
     /** A copy with a new id and the given name. */
     public AgentProfile duplicate(String newName) {
@@ -137,10 +142,10 @@ public final class AgentProfile {
         copy.permissionMode = permissionMode;
         copy.allowedTools = allowedTools;
         copy.maxTurns = maxTurns;
+        copy.maxMinutes = maxMinutes;
         copy.apiKey = apiKey;
         copy.baseUrl = baseUrl;
         copy.extraArgs = extraArgs;
-        copy.exposeTrackerMcp = exposeTrackerMcp;
         return copy;
     }
 

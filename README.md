@@ -10,7 +10,7 @@ A JavaFX orchestrator for Claude Code agents. Tickets move across a six-column b
 | **Review** | PR/MR open (link on the card) and an **AI reviews run** counter. **Run AI review** starts an AI review; **Resolve conflicts** brings the branch up to date with its base branch; **Move to Done** asks for confirmation first. Juno never merges: a human merges the PR in GitLab/GitHub. |
 | **In AI review** | An AI review agent is addressing the PR's comments in its own terminal. When it finishes, its fixes are pushed and the ticket returns to Review. |
 | **Resolving conflicts** | An agent is resolving merge conflicts between the branch and its updated base branch, in its own terminal. When it finishes, Juno pushes the merge and the ticket returns to Review. |
-| **Done** | Finished. **Remove from Done** sends it back to Review (or Pending); **Delete** removes it from Juno. |
+| **Done** | Finished. **Remove from Done** sends it back to Review (or Pending); **Delete** removes it from Juno, along with its working copy and logs on this computer (its branch, PR and issue stay). |
 
 Tickets can be imported from or uploaded to GitLab and GitHub. Juno does this through the
 [`juno-gitlab-mcp`](../juno-gitlab-mcp) and [`juno-github-mcp`](../juno-github-mcp) MCP servers, which
@@ -88,8 +88,10 @@ previous file is kept as `settings.pre-single-host.json`.
    project's build/test commands). Save checks the repository format and that its host is enabled for the
    organisation.
 2. **Settings → Agents**: create agent profiles. Each sets the Claude Code program, model, permission
-   mode, allowed tools, max turns, and an optional API key or server URL. Leave the key blank to use your
-   existing `claude` login.
+   mode, allowed tools, max turns (default 150), time limit (default 60 minutes), and an optional API key or
+   server URL. Leave the key blank to use your existing `claude` login. A run that hits its turn or time
+   limit stops in Awaiting decision; replying continues it. Agents never get GitHub/GitLab access themselves:
+   Juno does the pushing, pull requests and comments.
 3. **Settings → General**: for each MCP server, its port and whether Juno starts the jar or connects to a
    server you run (see above); the jar paths (leave blank to use the servers next to juno-main, which are
    built automatically if missing); the Java runtime for them; and the overall limit on concurrent agents.
@@ -100,8 +102,8 @@ previous file is kept as `settings.pre-single-host.json`.
    - upload ticket info to the project's host (creates the issue, or updates the linked one)
    - import ticket info from the project's host
 
-   Moving a ticket to a project in another organisation removes its issue links, after a warning, since
-   they belong to the old organisation's credentials.
+   A ticket links to at most one issue, on its project's host. Moving a ticket to a project in another
+   organisation removes the link, after a warning, since it belongs to the old organisation's credentials.
 5. **Start** needs a project: tickets without one can be saved but not run. Before anything is touched, Juno
    checks that the ticket has a title, base branch and agent; that its project has an existing git folder
    and a repository; that the organisation has that host enabled with a token; and, on GitHub/GitLab, that
@@ -294,8 +296,8 @@ so you can retry them.
 
 Headless Claude Code refuses any tool that needs approval unless the permission mode or the allowed-tools
 list permits it. The default `acceptEdits` lets agents edit files. To let them build and test, add rules
-such as `Bash(mvn test:*) Bash(git status)` under **Allowed tools**. If you enable *Give agents the
-GitLab/GitHub MCP tools*, also allow `mcp__juno-gitlab` and/or `mcp__juno-github`.
+such as `Bash(mvn test:*) Bash(git status)` under **Allowed tools**. Every agent is told which commands it
+may run, so it can, for example, install missing dependencies before building.
 
 ## Data
 
@@ -305,11 +307,15 @@ Everything is stored in `~/.juno` (override with the `JUNO_HOME` environment var
 - `settings.json`: organisations, projects, agent profiles and integration settings. **Tokens and API
   keys typed into Settings are stored here in plain text.** Prefer `env:VARIABLE` references (for example
   `env:ACME_GITLAB_TOKEN`), which are read from Juno's environment when needed.
-- `logs/<ticket>.log`: agent activity
-- `agent-mcp/<ticket>.json`: per-run MCP config for agents (the project's host server on its port, with only
-  that ticket's organisation's token)
-- `worktrees/<ticket>/`: the git worktree each ticket's agent works in
-- `runs/<ticket>/`: the journal and prompt of every agent run, used to resume interrupted work
+- `logs/<ticket>.log`: agent activity. Over 5 MB it moves to `<ticket>.1.log` (replacing the previous one).
+- `worktrees/<ticket>/`: the git worktree each ticket's agent works in. Removed once its work is delivered,
+  recreated by the next run.
+- `runs/<ticket>/`: the journal and prompt of the ticket's 10 most recent agent runs, used to resume
+  interrupted work
+
+Deleting a ticket removes its worktree (with any uncommitted changes), logs, runs and terminal scripts; its
+branch is kept. On start-up Juno also removes these files for tickets that no longer exist (worktrees only if
+they have no uncommitted changes), and agent connection files left by earlier versions.
 - `consoles/`: the scripts that open each ticket's terminal; `console.token` secures the console API
 
 ## Layout
@@ -325,7 +331,8 @@ dev.juno.main
 ├── git                  worktree/branch preparation, commit, push
 ├── console              agent terminals: local console API, terminal launcher, console client
 ├── skills               skill library: uploads, bundled packs, per-run copies
-├── service              BoardService: orchestration, thread-safe, UI-agnostic
+├── service              BoardService (entry point; tickets and settings, as snapshots) and its parts:
+│                        Preflight, AgentRuns, Delivery, TrackerSync, Terminals, Housekeeping
 └── ui                   Board, cards, dialogs
 ```
 

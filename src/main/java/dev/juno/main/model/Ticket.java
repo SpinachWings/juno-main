@@ -10,8 +10,8 @@ public final class Ticket {
     private String description = "";
     private TicketStatus status = TicketStatus.PENDING;
     private String projectId;
-    private ExternalRef gitlab;
-    private ExternalRef github;
+    /** The linked issue, on the project's host (a ticket has at most one). */
+    private ExternalRef issue;
     /** Agent profile override for this ticket; null = inherit from the project, then the organisation. */
     private String agentProfileId;
 
@@ -121,16 +121,13 @@ public final class Ticket {
         this.projectId = projectId;
     }
 
-    public ExternalRef getRef(TrackerKind kind) {
-        return kind == TrackerKind.GITLAB ? gitlab : github;
+    /** The linked GitHub/GitLab issue, or null. */
+    public ExternalRef getIssue() {
+        return issue;
     }
 
-    public void setRef(TrackerKind kind, ExternalRef ref) {
-        if (kind == TrackerKind.GITLAB) {
-            gitlab = ref;
-        } else {
-            github = ref;
-        }
+    public void setIssue(ExternalRef issue) {
+        this.issue = issue;
     }
 
     public String getAgentProfileId() {

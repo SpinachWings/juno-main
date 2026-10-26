@@ -18,6 +18,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Locale;
 
 /**
  * The agent console shown in a terminal window for a ticket. It streams the agent's activity from Juno and,
@@ -216,7 +217,7 @@ public final class AgentConsole {
     }
 
     private void onInputLine(String line) {
-        String command = line.strip().toLowerCase(java.util.Locale.ROOT);
+        String command = line.strip().toLowerCase(Locale.ROOT);
         if (command.equals("/export")) {
             try {
                 JsonNode result = post("design/export?ticket=" + enc(ticket), "");

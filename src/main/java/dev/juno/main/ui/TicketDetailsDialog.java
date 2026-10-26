@@ -1,7 +1,7 @@
 package dev.juno.main.ui;
 
-import dev.juno.main.model.AgentProfile;
 import dev.juno.main.git.GitWorkspace;
+import dev.juno.main.model.AgentProfile;
 import dev.juno.main.model.ExternalRef;
 import dev.juno.main.model.JunoSettings;
 import dev.juno.main.model.Organisation;
@@ -11,8 +11,11 @@ import dev.juno.main.model.Ticket;
 import dev.juno.main.model.TrackerKind;
 import dev.juno.main.service.BoardService;
 import javafx.application.HostServices;
+import javafx.event.ActionEvent;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.geometry.VPos;
+import javafx.scene.Node;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonBar;
 import javafx.scene.control.ButtonType;
@@ -30,12 +33,11 @@ import javafx.scene.layout.ColumnConstraints;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import javafx.stage.Window;
 
-import java.util.EnumMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -56,7 +58,8 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
     private static final Item NO_PROJECT = new Item(null, "— choose a project (required to run) —");
 
     private final BoardService service;
-    private final Ticket ticket;
+    /** Snapshot of the ticket; refreshed from the service after every change. */
+    private Ticket ticket;
     private final boolean isNew;
     private final HostServices hostServices;
 
@@ -75,7 +78,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
     private final ComboBox<Item> project = new ComboBox<>();
     private final ComboBox<Item> agent = new ComboBox<>();
     private boolean loading;
-    private final Map<TrackerKind, HBox> linkRows = new EnumMap<>(TrackerKind.class);
+    private final HBox issueRow = new HBox(6);
     private final VBox actionsBox = new VBox(8);
     private final Label status = new Label();
     private final ProgressIndicator busy = new ProgressIndicator(-1);
@@ -102,7 +105,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         loadFromTicket();
 
         Button saveButton = (Button) getDialogPane().lookupButton(save);
-        saveButton.addEventFilter(javafx.event.ActionEvent.ACTION, e -> {
+        saveButton.addEventFilter(ActionEvent.ACTION, e -> {
             String branchProblem = branchProblem();
             if (title.getText().isBlank()) {
                 status.setText("A title is required.");
@@ -116,15 +119,20 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         });
 
         setResultConverter(button -> {
+            reload();
             if (button == save) {
                 applyEdits();
-            } else if (this.isNew && ticket.getRef(TrackerKind.GITLAB) == null
-                    && ticket.getRef(TrackerKind.GITHUB) == null && ticket.getTitle().isBlank()) {
+            } else if (this.isNew && ticket.getIssue() == null && ticket.getTitle().isBlank()) {
                 service.deleteTicket(ticket.getId());
             }
             return button;
         });
         setOnShown(e -> title.requestFocus());
+    }
+
+    /** Re-reads the ticket from the service after a change (the dialog works on a snapshot). */
+    private void reload() {
+        ticket = service.ticket(ticket.getId()).orElse(ticket);
     }
 
     private BorderPane buildContent() {
@@ -154,7 +162,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         form.setHgap(10);
         form.setVgap(10);
         ColumnConstraints labels = new ColumnConstraints();
-        labels.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE); // labels never shrink to "..."
+        labels.setMinWidth(Region.USE_PREF_SIZE); // labels never shrink to "..."
         ColumnConstraints fields = new ColumnConstraints();
         fields.setHgrow(Priority.ALWAYS);
         form.getColumnConstraints().addAll(labels, fields);
@@ -170,7 +178,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
                 branchName.setPromptText(GitWorkspace.suggestBranchName(value)));
         HBox.setHgrow(branchName, Priority.ALWAYS);
         Label branchLabel = new Label("Branch name");
-        branchLabel.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
+        branchLabel.setMinWidth(Region.USE_PREF_SIZE);
         HBox branchRow = new HBox(8, baseBranch, branchLabel, branchName);
         branchRow.setAlignment(Pos.CENTER_LEFT);
         branchHint.getStyleClass().add("hint");
@@ -178,7 +186,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         form.addRow(4, new Label("Base branch"), new VBox(2, branchRow, branchHint));
 
         Label descLabel = new Label("Description");
-        GridPane.setValignment(descLabel, javafx.geometry.VPos.TOP);
+        GridPane.setValignment(descLabel, VPos.TOP);
         form.addRow(5, descLabel, description);
         GridPane.setVgrow(description, Priority.ALWAYS);
 
@@ -187,7 +195,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         instructions.setWrapText(true);
         instructions.setPrefRowCount(5);
         Label instructionsLabel = new Label("Initial\ninstructions");
-        GridPane.setValignment(instructionsLabel, javafx.geometry.VPos.TOP);
+        GridPane.setValignment(instructionsLabel, VPos.TOP);
         form.addRow(6, instructionsLabel, instructions);
 
         designDoc.setPromptText("Leave empty to write the design doc with the agent (a back-and-forth conversation "
@@ -204,23 +212,18 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         });
         VBox designBox = new VBox(6, generateDesign, designDoc, designActions);
         Label designLabel = new Label("Design doc");
-        GridPane.setValignment(designLabel, javafx.geometry.VPos.TOP);
+        GridPane.setValignment(designLabel, VPos.TOP);
         form.addRow(7, designLabel, designBox);
 
         VBox links = new VBox(4);
-        for (TrackerKind kind : TrackerKind.values()) {
-            HBox row = new HBox(6);
-            row.setAlignment(Pos.CENTER_LEFT);
-            linkRows.put(kind, row);
-            links.getChildren().add(row);
-        }
+        issueRow.setAlignment(Pos.CENTER_LEFT);
         pullRequestRow.setAlignment(Pos.CENTER_LEFT);
-        links.getChildren().add(pullRequestRow);
-        form.addRow(8, new Label("Linked issues"), links);
+        links.getChildren().addAll(issueRow, pullRequestRow);
+        form.addRow(8, new Label("Links"), links);
         // Field labels keep their full text however narrow the dialog gets (no truncation to "...").
-        for (javafx.scene.Node child : form.getChildren()) {
+        for (Node child : form.getChildren()) {
             if (child instanceof Label label) {
-                label.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
+                label.setMinWidth(Region.USE_PREF_SIZE);
             }
         }
 
@@ -379,7 +382,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
     private void refreshLinks() {
         pullRequestRow.getChildren().clear();
         Label prName = new Label("Pull request:");
-        prName.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
+        prName.setMinWidth(Region.USE_PREF_SIZE);
         pullRequestRow.getChildren().add(prName);
         PullRequestRef pr = ticket.getPullRequest();
         if (pr != null) {
@@ -396,32 +399,30 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
             none.getStyleClass().add("hint");
             pullRequestRow.getChildren().add(none);
         }
-        for (TrackerKind kind : TrackerKind.values()) {
-            HBox row = linkRows.get(kind);
-            row.getChildren().clear();
-            Label name = new Label(kind.displayName() + ":");
-            name.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
-            row.getChildren().add(name);
-            ExternalRef ref = ticket.getRef(kind);
-            if (ref == null) {
-                Label none = new Label("not linked");
-                none.getStyleClass().add("hint");
-                row.getChildren().add(none);
-            } else {
-                Hyperlink link = new Hyperlink(ref.display());
-                link.setOnAction(e -> {
-                    if (ref.url() != null && !ref.url().isBlank()) {
-                        hostServices.showDocument(ref.url());
-                    }
-                });
-                Button unlink = new Button("Unlink");
-                unlink.getStyleClass().add("small");
-                unlink.setOnAction(e -> {
-                    service.unlink(ticket.getId(), kind);
-                    refreshLinks();
-                });
-                row.getChildren().addAll(link, unlink);
-            }
+        issueRow.getChildren().clear();
+        Label issueName = new Label("Issue:");
+        issueName.setMinWidth(Region.USE_PREF_SIZE);
+        issueRow.getChildren().add(issueName);
+        ExternalRef ref = ticket.getIssue();
+        if (ref == null) {
+            Label none = new Label("not linked");
+            none.getStyleClass().add("hint");
+            issueRow.getChildren().add(none);
+        } else {
+            Hyperlink link = new Hyperlink(ref.tracker().displayName() + " " + ref.display());
+            link.setOnAction(e -> {
+                if (ref.url() != null && !ref.url().isBlank()) {
+                    hostServices.showDocument(ref.url());
+                }
+            });
+            Button unlink = new Button("Unlink");
+            unlink.getStyleClass().add("small");
+            unlink.setOnAction(e -> {
+                service.unlink(ticket.getId());
+                reload();
+                refreshLinks();
+            });
+            issueRow.getChildren().addAll(link, unlink);
         }
     }
 
@@ -450,6 +451,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         applyEdits();
         setBusy(true, "Exporting design doc");
         Fx.async(() -> service.exportDesignDoc(ticket.getId()), path -> {
+            reload();
             setBusy(false, "Design doc saved to " + path);
             refreshDesignStatus();
         }, err -> {
@@ -482,7 +484,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
     private void applyEdits() {
         String projectId = selectedProjectId();
         if (!Objects.equals(projectId, ticket.getProjectId())) {
-            service.assignProject(ticket, projectId);
+            service.assignProject(ticket.getId(), projectId);
         }
         ticket.setTitle(title.getText().strip());
         ticket.setDescription(description.getText());
@@ -501,6 +503,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         }
         ticket.setAgentProfileId(selectedAgentId());
         service.saveTicket(ticket);
+        reload();
         refreshLinks();
     }
 
@@ -518,7 +521,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
             return;
         }
         applyEdits();
-        ExternalRef existing = ticket.getRef(kind);
+        ExternalRef existing = ticket.getIssue() != null && ticket.getIssue().tracker() == kind ? ticket.getIssue() : null;
         String location;
         if (existing != null) {
             if (!Fx.confirm(getDialogPane().getScene().getWindow(), "Update " + kind.displayName() + " issue?",
@@ -541,6 +544,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
         }
         setBusy(true, "Uploading to " + kind.displayName());
         Fx.async(() -> service.upload(ticket.getId(), kind, location), ref -> {
+            reload();
             setBusy(false, (existing != null ? "Updated " : "Created ") + kind.displayName() + " issue " + ref.display());
             refreshLinks();
         }, err -> {
@@ -550,7 +554,7 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
     }
 
     private void importFrom(TrackerKind kind) {
-        ExternalRef existing = ticket.getRef(kind);
+        ExternalRef existing = ticket.getIssue() != null && ticket.getIssue().tracker() == kind ? ticket.getIssue() : null;
         Organisation org = organisation.getValue();
         // Only reuse the existing link if the form still points at the ticket's current organisation.
         boolean sameOrg = org != null && service.organisationOf(ticket).map(o -> o.getId().equals(org.getId()))
@@ -569,11 +573,13 @@ final class TicketDetailsDialog extends Dialog<ButtonType> {
                     }
                     // Keep the agent choice made in the form; the import sets project, title and description.
                     ticket.setAgentProfileId(selectedAgentId());
+                    service.saveTicket(ticket);
                     setBusy(true, "Importing from " + kind.displayName());
                     Fx.async(() -> {
                         service.importIssue(ticket.getId(), sel.projectId(), kind, sel.location(), sel.number());
                         return null;
                     }, ok -> {
+                        reload();
                         loadFromTicket();
                         String linked = service.projectOf(ticket).map(p -> " into project " + p.getName()
                                 + service.organisationOf(ticket).map(o -> " (" + o.getName() + ")").orElse(""))

@@ -7,10 +7,11 @@ import dev.juno.main.model.Organisation;
 import dev.juno.main.model.Project;
 import dev.juno.main.model.SkillEntry;
 import dev.juno.main.model.SkillScope;
-import dev.juno.main.skills.SkillLibrary;
 import dev.juno.main.model.TrackerKind;
 import dev.juno.main.model.TrackerSettings;
 import dev.juno.main.service.BoardService;
+import dev.juno.main.skills.SkillLibrary;
+import javafx.event.ActionEvent;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
@@ -22,6 +23,7 @@ import javafx.scene.control.ColorPicker;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
+import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.ScrollPane;
@@ -29,7 +31,9 @@ import javafx.scene.control.Spinner;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
 import javafx.scene.control.TextField;
+import javafx.scene.control.TextFormatter;
 import javafx.scene.control.TextInputControl;
+import javafx.scene.control.Tooltip;
 import javafx.scene.control.TreeCell;
 import javafx.scene.control.TreeItem;
 import javafx.scene.control.TreeView;
@@ -45,15 +49,22 @@ import javafx.scene.shape.Circle;
 import javafx.stage.DirectoryChooser;
 import javafx.stage.FileChooser;
 import javafx.stage.Window;
+import javafx.util.StringConverter;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import java.util.regex.Pattern;
 
 /**
  * Settings, edited on a working copy that replaces the live settings on Save:
@@ -91,7 +102,6 @@ final class SettingsDialog extends Dialog<JunoSettings> {
     private final Map<TrackerKind, CheckBox> trackerEnabled = new EnumMap<>(TrackerKind.class);
     private final Map<TrackerKind, TextField> trackerUrl = new EnumMap<>(TrackerKind.class);
     private final Map<TrackerKind, PasswordField> trackerToken = new EnumMap<>(TrackerKind.class);
-    private final Map<TrackerKind, Label> trackerResult = new EnumMap<>(TrackerKind.class);
     private final Label orgProjectsLabel = new Label();
     private Node orgForm;
 
@@ -115,10 +125,9 @@ final class SettingsDialog extends Dialog<JunoSettings> {
     private final ComboBox<String> model = new ComboBox<>();
     private final ComboBox<String> permissionMode = new ComboBox<>();
     private final TextField allowedTools = new TextField();
-    private final Spinner<Integer> maxTurns = new Spinner<>(0, 1000, 0, 5);
+    private final Spinner<Integer> maxTurns = new Spinner<>(1, 1000, AgentProfile.DEFAULT_MAX_TURNS, 10);
+    private final Spinner<Integer> maxMinutes = new Spinner<>(1, 1440, AgentProfile.DEFAULT_MAX_MINUTES, 5);
     private final TextField extraArgs = new TextField();
-    private final CheckBox exposeMcp =
-            new CheckBox("Give agents their organisation's GitLab/GitHub MCP tools (read issues and review comments)");
     private final Label agentUsage = new Label();
     private final GridPane agentForm = new GridPane();
 
@@ -172,7 +181,7 @@ final class SettingsDialog extends Dialog<JunoSettings> {
 
         ButtonType save = new ButtonType("Save", ButtonBar.ButtonData.OK_DONE);
         getDialogPane().getButtonTypes().addAll(save, ButtonType.CANCEL);
-        getDialogPane().lookupButton(save).addEventFilter(javafx.event.ActionEvent.ACTION, e -> {
+        getDialogPane().lookupButton(save).addEventFilter(ActionEvent.ACTION, e -> {
             List<String> problems = validate();
             if (!problems.isEmpty()) {
                 e.consume(); // keep the dialog open
@@ -196,7 +205,7 @@ final class SettingsDialog extends Dialog<JunoSettings> {
     /** Problems that would stop projects from working; Save is refused until they are fixed. */
     private List<String> validate() {
         List<String> problems = new ArrayList<>();
-        java.util.Set<Integer> ports = new java.util.HashSet<>();
+        Set<Integer> ports = new HashSet<>();
         for (TrackerKind kind : TrackerKind.values()) {
             String text = mcpPort.get(kind).getText().strip();
             int port = text.isEmpty() ? -1 : Integer.parseInt(text);
@@ -206,15 +215,15 @@ final class SettingsDialog extends Dialog<JunoSettings> {
                 problems.add("The GitHub and GitLab MCP servers need different ports.");
             }
             if (mcpLaunch.get(kind).getValue() == McpLaunch.JAR && mcpJar.get(kind).getText().isBlank()
-                    && !java.nio.file.Files.isDirectory(java.nio.file.Path.of(JunoSettings.defaultJar(
+                    && !Files.isDirectory(Path.of(JunoSettings.defaultJar(
                     kind == TrackerKind.GITLAB ? "juno-gitlab-mcp" : "juno-github-mcp"))
                     .getParent().getParent())) {
                 problems.add("The " + kind.displayName() + " MCP server wasn't found next to juno-main. Set its "
                         + "jar, or choose 'Already running on localhost'.");
             }
         }
-        java.util.regex.Pattern githubRepo = java.util.regex.Pattern.compile("[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+");
-        java.util.regex.Pattern gitlabProject = java.util.regex.Pattern.compile("([^/\\s]+/)+[^/\\s]+|\\d+");
+        Pattern githubRepo = Pattern.compile("[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+");
+        Pattern gitlabProject = Pattern.compile("([^/\\s]+/)+[^/\\s]+|\\d+");
         for (Project p : working.getProjects()) {
             String name = "Project '" + p.getName() + "'";
             if (p.getName() == null || p.getName().isBlank()) {
@@ -335,13 +344,9 @@ final class SettingsDialog extends Dialog<JunoSettings> {
             TextField url = new TextField();
             PasswordField token = new PasswordField();
             token.setPromptText("Access token (or env:VARIABLE)");
-            Label result = new Label();
-            result.setWrapText(true);
-            Button test = new Button("Test connection");
             trackerEnabled.put(kind, enabled);
             trackerUrl.put(kind, url);
             trackerToken.put(kind, token);
-            trackerResult.put(kind, result);
 
             enabled.selectedProperty().addListener((obs, old, on) -> {
                 if (!loading && selected() instanceof Organisation o) {
@@ -349,22 +354,16 @@ final class SettingsDialog extends Dialog<JunoSettings> {
                 }
                 url.setDisable(!on);
                 token.setDisable(!on);
-                test.setDisable(!on);
             });
             bind(url, Organisation.class, (o, v) -> o.tracker(kind).setApiUrl(v));
             bind(token, Organisation.class, (o, v) -> o.tracker(kind).setToken(v));
-            test.setOnAction(e -> testTracker(kind));
-
-            HBox testRow = new HBox(8, test, result);
-            testRow.setAlignment(Pos.CENTER_LEFT);
             grid.add(sectionTitle(kind.displayName() + " integration"), 0, row++, 2, 1);
             grid.add(enabled, 1, row++);
             grid.addRow(row++, new Label(kind == TrackerKind.GITLAB ? "Instance URL" : "API URL"), url);
             grid.addRow(row++, new Label("Access token"), token);
-            grid.add(testRow, 1, row++);
         }
-        grid.add(hint("Each organisation runs its own GitLab/GitHub MCP server with only its own token, and agents "
-                + "only ever receive their ticket's organisation's servers. Tokens typed here are stored in plain "
+        grid.add(hint("Juno sends each organisation's token only with that organisation's GitHub/GitLab calls, and "
+                + "checks the repository and token when a ticket starts. Tokens typed here are stored in plain "
                 + "text in ~/.juno/settings.json; 'env:ACME_GITLAB_TOKEN' reads one from an environment variable "
                 + "instead."), 0, row, 2, 1);
         return grid;
@@ -392,7 +391,7 @@ final class SettingsDialog extends Dialog<JunoSettings> {
 
         projectPath.setPromptText("Local checkout the agents work in");
         projectHost.getItems().setAll(TrackerKind.GITHUB, TrackerKind.GITLAB);
-        projectHost.setConverter(new javafx.util.StringConverter<>() {
+        projectHost.setConverter(new StringConverter<>() {
             @Override
             public String toString(TrackerKind kind) {
                 return kind == null ? "" : kind.displayName();
@@ -509,7 +508,6 @@ final class SettingsDialog extends Dialog<JunoSettings> {
                     trackerEnabled.get(kind).setSelected(t.isEnabled());
                     trackerUrl.get(kind).setText(t.getApiUrl());
                     trackerToken.get(kind).setText(t.getToken());
-                    trackerResult.get(kind).setText("");
                     boolean on = t.isEnabled();
                     trackerUrl.get(kind).setDisable(!on);
                     trackerToken.get(kind).setDisable(!on);
@@ -609,20 +607,6 @@ final class SettingsDialog extends Dialog<JunoSettings> {
         }
     }
 
-    private void testTracker(TrackerKind kind) {
-        if (!(selected() instanceof Organisation org)) {
-            return;
-        }
-        Label result = trackerResult.get(kind);
-        commitGeneral();
-        JunoSettings candidate = service.store().copy(working, JunoSettings.class);
-        String orgId = org.getId();
-        result.setText("Starting " + kind.displayName() + " MCP server for " + org.getName() + "…");
-        Fx.async(() -> service.testTracker(candidate, orgId, kind),
-                tools -> result.setText("OK - tools: " + String.join(", ", tools)),
-                err -> result.setText("Failed: " + err.getMessage()));
-    }
-
     // =========================================================================================
     // Agents
     // =========================================================================================
@@ -687,13 +671,14 @@ final class SettingsDialog extends Dialog<JunoSettings> {
         agentForm.addRow(row++, new Label("Model"), model);
         agentForm.addRow(row++, new Label("Permission mode"), permissionMode);
         agentForm.addRow(row++, new Label("Allowed tools"), allowedTools);
-        agentForm.addRow(row++, new Label("Max turns (0 = no limit)"), maxTurns);
+        agentForm.addRow(row++, new Label("Max turns"), maxTurns);
+        agentForm.addRow(row++, new Label("Time limit (minutes)"), maxMinutes);
         agentForm.addRow(row++, new Label("Extra CLI arguments"), extraArgs);
-        agentForm.add(exposeMcp, 1, row++);
         agentForm.add(hint("In headless mode, tools that need approval are refused unless the permission mode or "
                 + "allowed tools permit them. 'acceptEdits' lets agents edit files; add Bash rules so they can "
-                + "build and test (projects can add their own). MCP tools must be allowed explicitly, e.g. "
-                + "mcp__juno-github."), 1, row);
+                + "build and test (projects can add their own). Agents never get GitHub/GitLab access: Juno pushes, "
+                + "opens pull requests and posts summaries itself. Max turns and the time limit stop runaway runs (and "
+                + "their cost); a stopped run can be continued by replying to it."), 1, row);
 
         bindAgent(agentName, (a, v) -> {
             a.setName(v);
@@ -713,7 +698,7 @@ final class SettingsDialog extends Dialog<JunoSettings> {
         });
         permissionMode.valueProperty().addListener((obs, old, v) -> withAgent(a -> a.setPermissionMode(v)));
         maxTurns.valueProperty().addListener((obs, old, v) -> withAgent(a -> a.setMaxTurns(v)));
-        exposeMcp.selectedProperty().addListener((obs, old, v) -> withAgent(a -> a.setExposeTrackerMcp(v)));
+        maxMinutes.valueProperty().addListener((obs, old, v) -> withAgent(a -> a.setMaxMinutes(v)));
 
         agentList.getSelectionModel().selectedItemProperty().addListener((obs, old, a) -> loadAgent(a));
         if (!agentList.getItems().isEmpty()) {
@@ -741,9 +726,9 @@ final class SettingsDialog extends Dialog<JunoSettings> {
             model.getEditor().setText(a == null ? "" : a.getModel());
             permissionMode.setValue(a == null ? null : a.getPermissionMode());
             allowedTools.setText(a == null ? "" : a.getAllowedTools());
-            maxTurns.getValueFactory().setValue(a == null ? 0 : a.getMaxTurns());
+            maxTurns.getValueFactory().setValue(a == null ? AgentProfile.DEFAULT_MAX_TURNS : a.getMaxTurns());
+            maxMinutes.getValueFactory().setValue(a == null ? AgentProfile.DEFAULT_MAX_MINUTES : a.getMaxMinutes());
             extraArgs.setText(a == null ? "" : a.getExtraArgs());
-            exposeMcp.setSelected(a != null && a.isExposeTrackerMcp());
             agentUsage.setText(a == null ? "" : usageOf(a));
         } finally {
             loading = false;
@@ -811,7 +796,7 @@ final class SettingsDialog extends Dialog<JunoSettings> {
         for (TrackerKind kind : TrackerKind.values()) {
             ComboBox<McpLaunch> launch = new ComboBox<>();
             launch.getItems().setAll(McpLaunch.values());
-            launch.setConverter(new javafx.util.StringConverter<>() {
+            launch.setConverter(new StringConverter<>() {
                 @Override
                 public String toString(McpLaunch l) {
                     return l == null ? "" : l.label();
@@ -825,7 +810,7 @@ final class SettingsDialog extends Dialog<JunoSettings> {
             launch.setValue(working.mcpLaunch(kind));
             TextField port = new TextField(Integer.toString(working.mcpPort(kind)));
             port.setPrefColumnCount(6);
-            port.setTextFormatter(new javafx.scene.control.TextFormatter<String>(
+            port.setTextFormatter(new TextFormatter<String>(
                     change -> change.getControlNewText().matches("\\d{0,5}") ? change : null));
             TextField jar = new TextField(working.mcpJar(kind));
             jar.setPromptText("Blank = found next to juno-main automatically");
@@ -906,7 +891,7 @@ final class SettingsDialog extends Dialog<JunoSettings> {
         skillList.getItems().setAll(working.getSkills());
         skillList.setPrefWidth(300);
         skillList.setPlaceholder(new Label("No skills yet"));
-        skillList.setCellFactory(list -> new javafx.scene.control.ListCell<>() {
+        skillList.setCellFactory(list -> new ListCell<>() {
             @Override
             protected void updateItem(SkillEntry e, boolean empty) {
                 super.updateItem(e, empty);
@@ -1015,7 +1000,7 @@ final class SettingsDialog extends Dialog<JunoSettings> {
         return pane;
     }
 
-    private void importSkill(java.nio.file.Path source) {
+    private void importSkill(Path source) {
         ScopeItem scope = skillScope.getValue();
         try {
             SkillEntry entry = service.skillLibrary().importSkill(source,
@@ -1024,7 +1009,7 @@ final class SettingsDialog extends Dialog<JunoSettings> {
             importedThisSession.add(entry);
             skillList.getItems().add(entry);
             skillList.getSelectionModel().select(entry);
-        } catch (java.io.IOException ex) {
+        } catch (IOException ex) {
             Fx.error(getDialogPane().getScene().getWindow(), "Could not add the skill", ex);
         }
     }
@@ -1064,10 +1049,10 @@ final class SettingsDialog extends Dialog<JunoSettings> {
                     .findFirst().orElse(items.getFirst()));
             skillContents.getChildren().clear();
             if (e != null) {
-                for (SkillLibrary.SkillInfo info : SkillLibrary.scan(java.nio.file.Path.of(e.getFolder()))) {
+                for (SkillLibrary.SkillInfo info : SkillLibrary.scan(Path.of(e.getFolder()))) {
                     CheckBox box = new CheckBox(info.name());
                     box.setSelected(!e.getDisabledSkills().contains(info.folderName()));
-                    box.setTooltip(new javafx.scene.control.Tooltip(info.description()));
+                    box.setTooltip(new Tooltip(info.description()));
                     box.selectedProperty().addListener((obs, old, on) -> {
                         if (on) {
                             e.getDisabledSkills().remove(info.folderName());
