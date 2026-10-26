@@ -438,7 +438,7 @@ public final class BoardService implements AgentRunner.Listener, AutoCloseable {
                         .comments()) {
                     boolean afterPr = prOpened == null
                             || parseInstant(c.createdAt()) == null || parseInstant(c.createdAt()).isAfter(prOpened);
-                    if (afterPr && !c.body().isBlank() && !c.body().contains(ReviewComment.JUNO_MARKER)) {
+                    if (afterPr && !c.body().isBlank() && !ReviewComment.isJunoText(c.body())) {
                         feedback.add(new ReviewComment("issue", 0, c.author(), c.body(), null, 0, null,
                                 c.createdAt(), false));
                     }

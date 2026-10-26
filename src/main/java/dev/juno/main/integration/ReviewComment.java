@@ -12,7 +12,12 @@ import com.fasterxml.jackson.databind.JsonNode;
  * @param resolved  whether the thread is resolved (GitLab)
  */
 public record ReviewComment(String kind, long id, String author, String body, String path, int line,
-                            String diffHunk, String createdAt, boolean resolved) {
+                            String diffHunk, String createdAt, boolean resolved, boolean flaggedByServer) {
+
+    public ReviewComment(String kind, long id, String author, String body, String path, int line, String diffHunk,
+                         String createdAt, boolean resolved) {
+        this(kind, id, author, body, path, line, diffHunk, createdAt, resolved, false);
+    }
 
     /** Marker Juno puts in the comments it posts, so they are not treated as feedback. */
     public static final String JUNO_MARKER = "<!-- juno -->";
@@ -27,10 +32,25 @@ public record ReviewComment(String kind, long id, String author, String body, St
                 c.path("line").asInt(0),
                 c.hasNonNull("diffHunk") ? c.get("diffHunk").asText() : null,
                 c.path("createdAt").asText(""),
-                c.path("resolved").asBoolean(false));
+                c.path("resolved").asBoolean(false),
+                c.path("postedByJuno").asBoolean(false));
     }
 
+    /** Juno's own summaries (AI reviews, conflict resolutions) are never review feedback. */
     public boolean postedByJuno() {
-        return body != null && body.contains(JUNO_MARKER);
+        return flaggedByServer || isJunoText(body);
+    }
+
+    /**
+     * Whether text was written by Juno: it carries {@link #JUNO_MARKER}, or starts with one of Juno's comment
+     * headings (in case the marker was edited out).
+     */
+    public static boolean isJunoText(String body) {
+        if (body == null) {
+            return false;
+        }
+        String text = body.strip();
+        return text.contains(JUNO_MARKER) || text.startsWith("### AI review ")
+                || text.startsWith("### Merge conflicts resolved");
     }
 }
