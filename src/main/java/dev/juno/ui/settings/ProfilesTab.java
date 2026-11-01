@@ -65,7 +65,7 @@ public final class ProfilesTab extends BorderPane {
         list.getSelectionModel().selectedItemProperty().addListener((o, a, p) -> {
             if (p != null) edit(p, false);
         });
-        VBox left = new VBox(8, list);
+        VBox left = new VBox(8, Ui.button("+ New profile", this::newProfile), list);
         VBox.setVgrow(list, Priority.ALWAYS);
         left.setPadding(new Insets(0, 12, 0, 0));
         setLeft(left);
@@ -215,11 +215,29 @@ public final class ProfilesTab extends BorderPane {
     }
 
     private void duplicate() {
-        String base = editing.name + " copy";
+        Profile copy = editing.duplicate(uniqueName(editing.name + " copy"));
+        addAndSelect(copy);
+    }
+
+    private void newProfile() {
+        Profile p = new Profile();
+        p.name = uniqueName("new profile");
+        p.model = "claude-sonnet-5-5";
+        p.effort = "medium";
+        addAndSelect(p);
+    }
+
+    /** Saves the profile straight away so it shows in the list; edit and Save to change it. */
+    private void addAndSelect(Profile p) {
+        ctx.settings.profiles.add(p);
+        ctx.save();
+        reload(p.name);
+    }
+
+    private String uniqueName(String base) {
         String n = base;
         for (int i = 2; nameTaken(n); i++) n = base + " " + i;
-        Profile copy = editing.duplicate(n);
-        edit(copy, true);
+        return n;
     }
 
     private boolean nameTaken(String n) {

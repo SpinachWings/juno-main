@@ -133,7 +133,7 @@ public final class SkillsTab extends BorderPane {
         g.setHgap(14);
         g.setVgap(6);
         g.add(new Label("Skill"), 0, 0);
-        g.add(new Label("Everyone"), 1, 0);
+        g.add(Ui.withTip(new Label("Enabled"), "Global switch: off turns the skill off for every profile."), 1, 0);
         for (int c = 0; c < columns.size(); c++) g.add(new Label(columns.get(c).name), 2 + c, 0);
         List<String> skills = ctx.skills.skillsOf(pack);
         for (int r = 0; r < skills.size(); r++) {
