@@ -3,8 +3,11 @@ package dev.juno.provider.claude;
 import dev.juno.provider.Provider.VersionCheck;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -20,11 +23,14 @@ public final class ClaudeVersion {
 
     public static VersionCheck check(String executable) {
         String out;
+        VersionCheck notFound = new VersionCheck(false, "", "Claude Code wasn't found at “" + executable
+                + "”. Install it, or set the Claude Code path in System settings.");
+        // Through cmd.exe a missing command is only an error message on stdout; look for it on PATH first.
+        if (isWindows() && resolveOnWindows(executable) == null) return notFound;
         try {
             out = run(executable);
         } catch (IOException e) {
-            return new VersionCheck(false, "", "Claude Code wasn't found at “" + executable
-                    + "”. Install it, or set the Claude Code path in System settings.");
+            return notFound;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return new VersionCheck(false, "", "Checking the Claude Code version was interrupted.");
@@ -57,15 +63,58 @@ public final class ClaudeVersion {
         return 0;
     }
 
-    /** npm-installed CLIs on Windows are launched through {@code cmd.exe /c} (design §12). */
+    /**
+     * The command that starts {@code executable}: native executables directly, anything else (npm's {@code .cmd}
+     * shims) through {@code cmd.exe /c} on Windows (design §12).
+     */
     public static List<String> launcher(String executable) {
         List<String> cmd = new ArrayList<>();
-        if (System.getProperty("os.name", "").toLowerCase().contains("win")) {
+        if (isWindows()) {
+            Path resolved = resolveOnWindows(executable);
+            String name = resolved == null ? "" : resolved.getFileName().toString().toLowerCase(Locale.ROOT);
+            if (name.endsWith(".exe")) {
+                cmd.add(resolved.toString());
+                return cmd;
+            }
             cmd.add("cmd.exe");
             cmd.add("/c");
         }
         cmd.add(executable);
         return cmd;
+    }
+
+    static boolean isWindows() {
+        return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
+    }
+
+    /** Finds a command the way cmd.exe would (PATH and PATHEXT); null if not found. */
+    static Path resolveOnWindows(String executable) {
+        String pathExt = System.getenv().getOrDefault("PATHEXT", ".COM;.EXE;.BAT;.CMD");
+        List<String> exts = new ArrayList<>(List.of(""));
+        for (String e : pathExt.split(";")) if (!e.isBlank()) exts.add(e.toLowerCase(Locale.ROOT));
+        List<Path> dirs = new ArrayList<>();
+        Path given = Path.of(executable);
+        if (given.isAbsolute() || executable.contains("/") || executable.contains("\\")) {
+            dirs.add(given.toAbsolutePath().getParent());
+            given = given.getFileName();
+        } else {
+            for (String d : System.getenv().getOrDefault("PATH", "").split(java.io.File.pathSeparator)) {
+                if (!d.isBlank()) {
+                    try {
+                        dirs.add(Path.of(d.trim()));
+                    } catch (java.nio.file.InvalidPathException ignored) {
+                        // skip malformed PATH entries
+                    }
+                }
+            }
+        }
+        for (Path dir : dirs) {
+            for (String ext : exts) {
+                Path f = dir.resolve(given + ext);
+                if (Files.isRegularFile(f)) return f;
+            }
+        }
+        return null;
     }
 
     private static String run(String executable) throws IOException, InterruptedException {

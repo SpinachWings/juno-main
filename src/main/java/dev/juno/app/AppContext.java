@@ -2,6 +2,7 @@ package dev.juno.app;
 
 import dev.juno.model.Settings;
 import dev.juno.provider.claude.ClaudeCodeProvider;
+import dev.juno.runtime.AgentRuntime;
 import dev.juno.skills.SkillLibrary;
 import dev.juno.skills.SkillResolver;
 import dev.juno.store.JunoHome;
@@ -19,6 +20,7 @@ public final class AppContext {
     public final ClaudeCodeProvider provider;
     public final SkillLibrary skills;
     public final SkillResolver skillResolver;
+    public final AgentRuntime runtime;
     public Settings settings;
 
     private final List<Runnable> listeners = new ArrayList<>();
@@ -31,6 +33,7 @@ public final class AppContext {
         this.skills = new SkillLibrary(home);
         this.skillResolver = new SkillResolver(skills);
         this.settings = store.load();
+        this.runtime = new AgentRuntime(home, provider, () -> settings, this::save, skills, skillResolver);
     }
 
     public static AppContext create() {

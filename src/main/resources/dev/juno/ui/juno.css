@@ -11,6 +11,14 @@
     -juno-good: #7CFFB2;
     -juno-warn: #FFD166;
     -juno-bad: #FF5C6C;
+    -juno-add-bg: #10261a;
+    -juno-del-bg: #2a1217;
+    -juno-warn-bg: #2a2412;
+    -juno-code-bg: #16161b;
+    -juno-string: #E6C07B;
+    -juno-number: #D19A66;
+    -juno-select: #6FD6FF55;
+    -juno-bright: #FFFFFF;
 
     -fx-base: -juno-raised;
     -fx-background: -juno-bg;
@@ -130,6 +138,80 @@
 .status-chip.bad { -fx-border-color: -juno-bad; }
 .lock { -fx-text-fill: -juno-magenta; }
 .meter { -fx-border-color: -juno-line; -fx-padding: 3 8 3 8; -fx-text-fill: -juno-dim; }
-.banner-bad { -fx-background-color: #2a1217; -fx-border-color: -juno-bad; -fx-padding: 8 10 8 10; }
-.banner-warn { -fx-background-color: #2a2412; -fx-border-color: -juno-warn; -fx-padding: 8 10 8 10; }
+.banner-bad { -fx-background-color: -juno-del-bg; -fx-border-color: -juno-bad; -fx-padding: 8 10 8 10; }
+.banner-warn { -fx-background-color: -juno-warn-bg; -fx-border-color: -juno-warn; -fx-padding: 8 10 8 10; }
 .step-title { -fx-font-family: "VT323", "Consolas", monospace; -fx-font-size: 22px; -fx-text-fill: -juno-magenta; }
+
+/* ===== Agent pane (design §7.2–§7.5) ===== */
+.agent-pane { -fx-border-width: 1; -fx-background-color: -juno-bg; }
+.pane-top { -fx-background-color: -juno-panel; -fx-padding: 4 8 4 8; -fx-border-color: -juno-line; -fx-border-width: 0 0 1 0; }
+.pane-top .button { -fx-padding: 2 8 2 8; }
+.pane-name { -fx-font-family: "VT323", "Consolas", monospace; -fx-font-size: 20px; -fx-text-fill: -juno-blue; }
+.unread-dot { -fx-text-fill: -juno-magenta; }
+.pane-bottom { -fx-padding: 6 8 8 8; -fx-background-color: -juno-panel; -fx-border-color: -juno-line; -fx-border-width: 1 0 0 0; }
+.pane-meters .label { -fx-font-size: 12px; }
+.meter-text { -fx-text-fill: -juno-dim; }
+.meter-text.warn, .meter.warn { -fx-text-fill: -juno-warn; }
+.meter-text.bad, .meter.bad { -fx-text-fill: -juno-bad; }
+.pane-input { -fx-font-size: 13px; }
+.card-permission { -fx-background-color: -juno-warn-bg; -fx-border-color: -juno-warn; -fx-padding: 8; }
+.card-folder { -fx-background-color: -juno-warn-bg; -fx-border-color: -juno-warn; -fx-padding: 8; }
+.card-title { -fx-text-fill: -juno-warn; }
+.setup-form { -fx-background-color: -juno-panel; -fx-border-color: -juno-line; }
+.autocomplete { -fx-background-color: -juno-raised; -fx-border-color: -juno-blue; }
+.autocomplete .list-cell { -fx-padding: 3 8 3 8; }
+.ac-name { -fx-text-fill: -juno-blue; }
+
+/* Output: one rich text area. Spans are .text nodes; line classes style whole paragraphs. */
+.output { -fx-background-color: -juno-bg; -fx-padding: 6 10 6 10; -fx-font-family: "Share Tech Mono", "Consolas", monospace; -fx-font-size: 13px; }
+.output .text { -fx-fill: -juno-text; }
+.output .caret { -fx-stroke: transparent; }
+.output .selection { -fx-fill: -juno-select; }
+.indent-guide { -fx-border-color: -juno-line; -fx-border-width: 0 0 0 1; -fx-translate-x: 6; }
+.code-block, .code-head { -fx-background-color: -juno-code-bg; }
+.diff-add-line { -fx-background-color: -juno-add-bg; }
+.diff-del-line { -fx-background-color: -juno-del-bg; }
+.perm-pending, .question { -fx-background-color: -juno-warn-bg; }
+.output .text.who-user { -fx-fill: -juno-magenta; }
+.output .text.user-text { -fx-fill: -juno-text; }
+.output .text.who-agent { -fx-fill: -juno-blue; }
+.output .text.who-sub { -fx-fill: -juno-blue; -fx-opacity: 0.8; }
+.output .text.who-juno { -fx-fill: -juno-dim; }
+.output .text.copy-btn { -fx-fill: -juno-dim; }
+.output .text.toggle { -fx-fill: -juno-dim; }
+.output .text.dim, .output .text.thinking, .output .text.thinking-text { -fx-fill: -juno-dim; }
+.output .text.quiet { -fx-fill: -juno-dim; -fx-font-size: 11px; }
+.output .text.good { -fx-fill: -juno-good; }
+.output .text.bad { -fx-fill: -juno-bad; }
+.output .text.md-h1 { -fx-fill: -juno-blue; -fx-font-weight: bold; }
+.output .text.md-h2 { -fx-fill: -juno-magenta; -fx-font-weight: bold; }
+.output .text.md-strong { -fx-font-weight: bold; -fx-fill: -juno-bright; }
+.output .text.md-em { -fx-font-style: italic; }
+.output .text.md-code { -fx-fill: -juno-string; -rtfx-background-color: -juno-code-bg; }
+.output .text.md-codeblock { -fx-fill: -juno-text; }
+.output .text.md-mark { -fx-fill: -juno-dim; }
+.output .text.md-link { -fx-fill: -juno-blue; -fx-underline: true; }
+.output .text.hl-keyword { -fx-fill: -juno-magenta; }
+.output .text.hl-string { -fx-fill: -juno-string; }
+.output .text.hl-number { -fx-fill: -juno-number; }
+.output .text.hl-comment { -fx-fill: -juno-dim; -fx-font-style: italic; }
+.output .text.tool-head { -fx-fill: -juno-dim; }
+.output .text.tool-input { -fx-fill: -juno-text; }
+.output .text.tool-output { -fx-fill: -juno-dim; }
+.output .text.diff-head { -fx-fill: -juno-magenta; }
+.output .text.diff-file { -fx-fill: -juno-blue; }
+.output .text.diff-add { -fx-fill: -juno-good; }
+.output .text.diff-del { -fx-fill: -juno-bad; }
+.output .text.diff-same { -fx-fill: -juno-dim; }
+.output .text.diff-hunk { -fx-fill: -juno-blue; }
+.output .text.sub-head { -fx-fill: -juno-blue; }
+.output .text.plan-head { -fx-fill: -juno-magenta; }
+.output .text.todo-completed { -fx-fill: -juno-good; }
+.output .text.todo-in_progress { -fx-fill: -juno-warn; }
+.output .text.todo-pending { -fx-fill: -juno-text; }
+.output .text.perm-title { -fx-fill: -juno-warn; }
+.output .text.notice-info { -fx-fill: -juno-text; }
+.output .text.notice-dim { -fx-fill: -juno-dim; }
+.output .text.notice-good { -fx-fill: -juno-good; }
+.output .text.notice-warn { -fx-fill: -juno-warn; }
+.output .text.notice-bad { -fx-fill: -juno-bad; }

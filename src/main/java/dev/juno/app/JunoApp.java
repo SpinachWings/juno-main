@@ -2,6 +2,7 @@ package dev.juno.app;
 
 import dev.juno.ui.FirstRun;
 import dev.juno.ui.Theme;
+import dev.juno.ui.Ui;
 import java.io.IOException;
 import javafx.application.Application;
 import javafx.application.Platform;
@@ -18,6 +19,14 @@ public final class JunoApp extends Application {
         } catch (IOException e) {
             System.err.println("Could not refresh the bundled skills: " + e.getMessage());
         }
+
+        try {
+            ctx.runtime.start();
+        } catch (IOException e) {
+            Ui.error(null, "Juno can't start its agent server", e.getMessage());
+        }
+        stage.setOnHidden(e -> ctx.runtime.shutdown());
+        Runtime.getRuntime().addShutdownHook(new Thread(ctx.runtime::shutdown));
 
         MainWindow window = new MainWindow(ctx, stage);
         Scene scene = new Scene(window.root(), 1280, 800);

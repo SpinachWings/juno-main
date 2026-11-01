@@ -1,5 +1,126 @@
 # Progress
 
+## Milestone 2: one agent, end to end. Done (2026-11-01)
+
+### Done
+- **Provider** (`provider.Provider`, `AgentEvent`): command line, environment, stream-json in/out, interrupt, compact,
+  MCP config, skills plugin folder. `ClaudeCodeProvider` + `ClaudeStreamParser` turn Claude Code's output into
+  events: session, message, thinking (text or token estimate), tool use + result, diff (Edit / MultiEdit at the call,
+  Write once its result says create / update), sub-agent start / done (nested by `parent_tool_use_id`), to-dos,
+  usage (per API call, once per message id; turn totals with the context window), result, rate limit, background
+  task count, compaction (with the new context size).
+- **Runtime** (`runtime.AgentRuntime`, `AgentProcess`, `Journal`, `LiveAgent`, `HookEvents`): statuses with reason
+  tags and unread; status follows output events (turn opens on send or on output, closes on `result` unless
+  background tasks run; a final reply whose last paragraph starts with ❓ → Awaiting ❓; errors → ⚠ failed);
+  Done → Idle after 15 minutes; idle process timeout closes the process (next message resumes it); agent state saved
+  as it happens (`~/.juno/agents/<id>/agent.json`), every event journalled (`journal/<conversation>.jsonl`), raw
+  output logged (`logs/<conversation>.log`, rotated at 5 MB); crash or shutdown mid-turn → Awaiting ⏸ on the next
+  start; `/resume` sends the resume recap built from the journal (task, last actions, pending request, `git status`).
+  The hook's `Stop` event closes a turn whose `result` never arrived; output events stay primary.
+- **System prompt** = preamble + profile prompt (`--append-system-prompt-file`), rendered per launch.
+- **Skills**: one session-only plugin per pack under `agents/<id>/run/plugins/<pack>` (`--plugin-dir`), so skills
+  are `<pack>:<skill>` (e.g. `superpowers:brainstorming`, matching superpowers' own references).
+- **Juno MCP server** (`comms.JunoMcpServer`): streamable HTTP on 127.0.0.1, one random bearer token per process
+  (identifies the agent), tools `request_permission` (the `--permission-prompt-tool`) and `request_folder`; tool
+  descriptions come from `docs/prompts/tools/`.
+- **Permissions** (`comms.PermissionRules`, runtime): the four answers, editable rule with plain-words description,
+  per-agent rules (stored on the agent, matched automatically with "✓ allowed by rule …"), "always allow for
+  `<profile>`" adds to the profile's allowed tools (not offered for built-ins), disallowed tools refused without
+  asking (any part of a compound command), `/approve` / `/deny`.
+- **Folders**: no project → private empty folder `agents/<id>/home`; needs-a-folder profiles hold the first message
+  at Awaiting 📁 with a project picker in the pane; `request_folder` likewise; picking a project restarts the process
+  in it (conversation kept) and sends the held message or the folder-set notice.
+- **Pane** (`ui.pane`): top bar (status + reason, unread dot, name, profile, project or "no folder", model · effort,
+  Resume, Stop), rendered output in one read-only RichTextFX area (drag-select across blocks, Copy / Copy all /
+  Select all menu, ⧉ copy on every message and code block): Markdown messages (commonmark, tables), collapsed
+  thinking, plan checklists (earlier ones fold to "n/m done"), commands with output (long output collapsed), file
+  reads collapsed, diffs (red / green, new files highlighted), `/diff` patches, collapsible nested sub-agents,
+  permission requests and ❓ questions highlighted until answered, quiet per-turn usage lines; "can talk to" line;
+  context meter (amber above the fresh-start threshold, red ≥ 90 %, hover for input / output / cache) with last turn,
+  conversation tokens and API-price estimate; permission card and folder card above the input; input with `/`
+  autocomplete (commands, then agent names, skills, models, efforts).
+- **Toolbar**: usage-limit meter from rate-limit events (`5h 24% · week 18%`, resets on hover, amber > 80 %, red > 95 %).
+- **Commands** (`runtime.PaneCommands`): /stop /resume /new /compact /clear /copy /diff /usage /model /effort
+  /activate<skill> /approve /deny /help, profile commands (template + `{{args}}`), /hey<name> (see decisions);
+  plain messages refused while working (kept in the box), unknown commands "isn't supported"; Juno-only commands
+  say so.
+- **Unit tests** (51, `mvn verify`): stream parser on recorded line shapes, command line flags, permission rules and
+  proposals, runtime without a CLI (crash recovery, held message, missing Claude Code, names, commands, /activate,
+  permissions end to end over the MCP server incl. disallowed and wrong token, tools/list), system prompts of every
+  built-in profile, command parsing, recap, journal torn line, meters.
+- **Checked against the real CLI** (Claude Code 2.1.314, haiku / low, scratch `JUNO_HOME`, scratch
+  `CLAUDE_CONFIG_DIR`, scratch git repository) with `dev.juno.ui.AgentScreens` (test sources; drives the real window
+  and saves PNGs; scenarios edit, permissions, folder, subagent, kill, crash1 + crash2), `dev.juno.ui.pane.OutputPreview`
+  (made-up events, no CLI) and `dev.juno.runtime.RuntimeSmoke` (headless):
+  an edit shown as a diff, `/diff`, `/usage`; a permission prompt answered each of the four ways (and the per-agent
+  rule matching later); a held first message and a `request_folder`; a nested sub-agent, autocomplete, `/help`,
+  `/init` refused; a killed process → ⏸ and `/resume` with the recap; Juno killed mid-turn → ⏸ after restart and
+  `/resume`; `/compact`.
+
+### Stubbed
+- Board, splits, filter list, ⋯ options menu (per-agent rules list, conversations list): Milestone 3. Until then the
+  toolbar has a one-pane agent switcher and **+ New agent** shows a minimal setup form (name, profile, project,
+  colour) in the board area.
+- Worktrees (Milestone 3): agents that edit files work **directly in the project folder** for now; use scratch
+  repositories only. `branch` in the preamble is empty.
+- Queued status and the concurrency cap (Milestone 3).
+- Juno herself, links, `/cantalkto`, `/stoptalkingto`, `/getcontext`, the other MCP tools and tool access by allowed
+  tools (Milestone 4). "can talk to" shows Juno only; the preamble's contacts list is Juno only.
+- Keys in agents' `mcp.json`, host MCP servers, 🔑 (Milestone 5).
+
+### Decisions (not in the spec)
+1. **/stop** interrupts the turn (stream-json `interrupt`; killed after 10 s if it doesn't end) and leaves the agent
+   **Idle** with "Stopped. /resume continues"; Awaiting ⏸ is kept for crashes and shutdowns. `/resume` also retries an
+   Awaiting ⚠ failed turn. `/stop` on an agent holding a message for a folder drops the message.
+2. **/hey** is built now (it's the hint of the "working" refusal): it writes the `hey` wrapper into the running
+   process, which Claude Code reads when the current step ends; to an idle agent it's a normal message. Works for any
+   agent by name.
+3. **Async sub-agents:** Claude Code runs sub-agents in the background and its `result` can come before they finish.
+   A turn stays open while background tasks run, and closes 5 s after the last one ends with no further output.
+4. **Environment:** variables a parent Claude Code session sets for its children (`CLAUDECODE`,
+   `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_ENTRYPOINT`, …; list in `ClaudeCodeProvider`) are removed, so Juno started
+   from inside Claude Code doesn't make its agents part of that session. Everything else is passed on.
+5. **Windows launch:** a native `.exe` found on PATH (PATHEXT) is started directly; anything else (npm `.cmd`) through
+   `cmd.exe /c`. Stopping kills the process tree. A missing executable is found before running it.
+6. **Permission prompt answers:** allow returns the call's input unchanged (`updatedInput`); per-agent rules are
+   matched by Juno (not passed as `--allowedTools`) so each match shows its quiet line. Proposed Bash rules keep the
+   first word only for subcommand-style programs (`npm install`, `git commit`), else the program (`touch:*`).
+   Absolute file rules use Claude Code's `//` form.
+7. **Rules for the profile** are saved to settings at once and apply from the agents' next start.
+8. **Model / effort / project changes** restart the process before the next message (conversation kept via
+   `--resume`); a project change during a turn waits for the turn to end.
+9. **Journal** lines are appended (not temp-file-and-move; a torn last line is skipped on reading).
+10. **Context** = the last top-level API call's input + cache read + cache write + output; the window comes from the
+    turn's `modelUsage.contextWindow` (unknown until the first turn ends).
+11. **Pre-filled colours** cycle through seven (`SetupForm.COLOURS`); any colour can be picked. They're agent data,
+    not part of the palette.
+12. `--permission-mode default` is accepted by 2.1.314 (not listed in its help), so built-in profiles keep `default`.
+13. **Hook `Notification`** about a permission (when no request is pending) shows Awaiting 🔐; with
+    `--permission-prompt-tool` it isn't expected to fire.
+14. **Crash vs. shutdown:** closing Juno records "Juno was closed while you were working"; after a crash the reason
+    is "Juno crashed …" and the time is the last journalled event. Either way the pane gets a ⏸ line saying so.
+    The recap lists the last six top-level actions, with paths relative to the agent's folder.
+15. A ❓ question stays highlighted until you reply or the agent sends a newer reply (e.g. after async sub-agents).
+
+### Known issues
+- Bold Markdown has no bold face in Share Tech Mono (shown brighter instead of bold).
+- The `Notification` hook event still hasn't been exercised against the real CLI.
+- Rules containing a comma would split in `--allowedTools` (joined with commas).
+- Three MCP protocol errors are inline English, not in `docs/prompts/` ("Unknown tool", "Unknown agent", "Juno
+  couldn't handle this call"); a correctly launched agent can't reach them. The cancelled-request reason fragments
+  ("the process ended", "the user stopped you") are filled into `results/request_permission.md#cancelled` from Java.
+- Agents that edit files work in the project folder itself until worktrees (Milestone 3).
+
+### For the next milestone (3)
+- `ctx.runtime` (`AgentRuntime`) owns agents: `create`, `agents()`, `byName`, `live(id)` (process, pending
+  permissions, meters, history), `send`, `hey`, `stop`, `resume`, `newConversation`, `setProject`, `answer`,
+  listeners (`changed`, `event`, `rateLimit`, `agentsChanged`). `AgentPane` is self-contained per agent; the board
+  arranges panes. `MainWindow`'s switcher and `SetupForm` are the stand-ins to replace.
+- `Agent.conversations` already records each conversation (id, Claude session id, started / ended, first task);
+  journals and logs are per conversation id. `Agent.rules` holds the per-agent rules for the options menu.
+- `runtime.folder(agent)` is where worktrees plug in (TODO there); `AgentPrompts.systemPrompt` has the `branch` TODO.
+- Queueing: `AgentRuntime.deliver` is the one place a message starts a turn.
+
 ## Milestone 1: foundation and settings. Done (2026-11-01)
 
 ### Done
