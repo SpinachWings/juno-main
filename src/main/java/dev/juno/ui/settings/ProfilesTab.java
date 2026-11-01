@@ -110,6 +110,10 @@ public final class ProfilesTab extends BorderPane {
                 field("Name", name, true), field("Provider", provider, true), field("Executable path", exe, false),
                 field("Model", model, false), field("Effort", effort, false),
                 field("Permission mode", permission, true), field("System prompt", prompt, true),
+                Ui.row(Ui.button("Available tools…", () -> ToolsReference.show(getScene().getWindow(),
+                        () -> editing != null && !editing.builtIn,
+                        rule -> append(allowed, rule), rule -> append(disallowed, rule))),
+                        Ui.dim("What can go in the two lists below.")),
                 field("Allowed tools (one per line)", allowed, true),
                 field("Disallowed tools (one per line)", disallowed, true),
                 field("Max turns (per message)", maxTurns, false), field("Spend limit", spend, false),
@@ -322,6 +326,12 @@ public final class ProfilesTab extends BorderPane {
     private int indexOf(String n) {
         for (int i = 0; i < ctx.settings.profiles.size(); i++) if (ctx.settings.profiles.get(i).name.equals(n)) return i;
         throw new IllegalStateException(n);
+    }
+
+    private static void append(TextArea area, String rule) {
+        if (lines(area).contains(rule)) return;
+        String t = area.getText();
+        area.setText(t.isBlank() ? rule : t.stripTrailing() + "\n" + rule);
     }
 
     private static List<String> lines(TextArea a) {

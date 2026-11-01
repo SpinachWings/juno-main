@@ -119,6 +119,8 @@ public final class SkillsTab extends BorderPane {
         if (!pack.wholeOrchestration) {
             FlowPane flow = new FlowPane(12, 6);
             for (Profile p : ctx.settings.profiles) {
+                // Bundled packs go only to their locked profiles and to your own profiles, not other built-ins.
+                if (!ctx.skillResolver.assignable(pack, p)) continue;
                 boolean locked = pack.bundled && BundledPacks.lockedProfiles(pack.id).contains(p.name);
                 CheckBox cb = new CheckBox((locked ? LOCK + " " : "") + p.name);
                 cb.setSelected(locked || pack.profiles.contains(p.name));
@@ -138,32 +140,19 @@ public final class SkillsTab extends BorderPane {
         GridPane g = new GridPane();
         g.setHgap(14);
         g.setVgap(6);
-        // The global switch is only for imported packs; a bundled pack's skills are fixed per profile.
-        int first = pack.bundled ? 1 : 2;
+        int first = 1;
         g.add(new Label("Skill"), 0, 0);
-        if (!pack.bundled)
-            g.add(Ui.withTip(new Label("Enabled"), "Global switch: off turns the skill off for every profile."), 1, 0);
         for (int c = 0; c < columns.size(); c++) g.add(new Label(columns.get(c).name), first + c, 0);
         List<String> skills = ctx.skills.skillsOf(pack);
         for (int r = 0; r < skills.size(); r++) {
             String skill = skills.get(r);
             g.add(new Label(skill), 0, r + 1);
-            CheckBox all = new CheckBox();
-            boolean lockedAll = pack.bundled;
-            all.setSelected(!pack.disabledSkills.contains(skill));
-            all.setDisable(lockedAll);
-            all.setOnAction(e -> {
-                if (all.isSelected()) pack.disabledSkills.remove(skill); else pack.disabledSkills.add(skill);
-                changed();
-                show(pack);
-            });
-            if (!pack.bundled) g.add(all, 1, r + 1);
             for (int c = 0; c < columns.size(); c++) {
                 Profile p = columns.get(c);
                 boolean locked = pack.bundled && BundledPacks.lockedProfiles(pack.id).contains(p.name);
                 CheckBox cb = new CheckBox();
                 cb.setSelected(ctx.skillResolver.enabledIn(pack, p.name).contains(skill));
-                cb.setDisable(locked || pack.disabledSkills.contains(skill));
+                cb.setDisable(locked);
                 cb.setOnAction(e -> {
                     List<String> off = new ArrayList<>(pack.disabledPerProfile.getOrDefault(p.name, List.of()));
                     if (cb.isSelected()) off.remove(skill); else off.add(skill);

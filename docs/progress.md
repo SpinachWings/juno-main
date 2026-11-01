@@ -33,6 +33,14 @@
   store) renders the main window, all six tabs and every first-run step to PNG; the app was also started with
   `mvn javafx:run` against a scratch `JUNO_HOME` and `CLAUDE_CONFIG_DIR`.
 
+### Changes after review (same session)
+- Profiles tab: **+ New profile** and Duplicate both save immediately; **Available tools...** opens a reference of tools
+  and rule syntax (`model.ToolCatalog`, extend it in Milestone 5 with the host MCP tools) with add-to-allowed /
+  disallowed buttons for non-built-in profiles.
+- Skills tab: no global "Enabled" column (skills are switched per profile only; `SkillPack.disabledSkills` stays in the
+  model but has no UI). Bundled packs can be assigned only to their locked profiles (coder, planner) and own
+  profiles, never other built-ins; the resolver ignores such assignments. The tab refreshes when shown.
+
 ### Stubbed
 - Keys: Test button (Milestone 5). Storage section, Remove worktree, Clean up old data (Milestone 3).
 - Toolbar: Add agent (Milestone 3), usage meter (Milestone 2), Notes toggle (Milestone 6). The board is a placeholder.

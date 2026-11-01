@@ -32,15 +32,23 @@ public final class SkillResolver {
             Optional<List<String>> locked = BundledPacks.locked(pack.id, profile, all);
             if (locked.isPresent()) return locked.get();
         }
+        if (pack.bundled && dev.juno.model.BuiltInProfiles.isBuiltIn(profile)) return List.of();
         if (!pack.wholeOrchestration && !pack.profiles.contains(profile)) return List.of();
         List<String> off = new ArrayList<>(pack.disabledSkills);
         off.addAll(pack.disabledPerProfile.getOrDefault(profile, List.of()));
         return all.stream().filter(s -> !off.contains(s)).toList();
     }
 
+    /** Whether the pack may be assigned to the profile: bundled packs only to their locked profiles and own profiles. */
+    public boolean assignable(SkillPack pack, dev.juno.model.Profile profile) {
+        if (!pack.bundled || !profile.builtIn) return true;
+        return BundledPacks.lockedProfiles(pack.id).contains(profile.name);
+    }
+
     /** Whether a profile has this pack at all (assigned, locked or whole-orchestration). */
     public boolean assigned(SkillPack pack, String profile) {
         if (pack.bundled && BundledPacks.lockedProfiles(pack.id).contains(profile)) return true;
+        if (pack.bundled && dev.juno.model.BuiltInProfiles.isBuiltIn(profile)) return false;
         return pack.wholeOrchestration || pack.profiles.contains(profile);
     }
 }

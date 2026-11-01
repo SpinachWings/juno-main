@@ -50,6 +50,17 @@ class SkillsTest {
                 r.enabledIn(sp, "planner").stream().sorted().toList());
         assertTrue(r.enabledIn(sp, "reviewer").isEmpty());
 
+        // Other built-ins never get a bundled pack, even if old data says so.
+        sp.profiles.add("reviewer");
+        assertTrue(r.enabledIn(sp, "reviewer").isEmpty());
+        assertFalse(r.assigned(sp, "reviewer"));
+        dev.juno.model.Profile mine = new dev.juno.model.Profile();
+        mine.name = "my coder";
+        assertTrue(r.assignable(sp, mine));
+        assertFalse(r.assignable(sp, dev.juno.model.BuiltInProfiles.create().get(2)));
+        assertTrue(r.assignable(sp, dev.juno.model.BuiltInProfiles.create().get(1)));
+        sp.profiles.remove("reviewer");
+
         // Own profiles may get the pack with any selection; locked ones can't be changed by the user's data.
         sp.profiles.add("my coder");
         sp.disabledPerProfile.put("my coder", List.of("brainstorming"));
