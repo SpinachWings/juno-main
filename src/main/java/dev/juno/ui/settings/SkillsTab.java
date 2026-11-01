@@ -53,6 +53,12 @@ public final class SkillsTab extends BorderPane {
         reload(null);
     }
 
+    /** Re-reads profiles and packs (called when the tab is shown, since profiles change elsewhere). */
+    public void refresh() {
+        SkillPack sel = list.getSelectionModel().getSelectedItem();
+        reload(sel == null ? null : sel.id);
+    }
+
     private void reload(String selectId) {
         list.setItems(FXCollections.observableArrayList(ctx.settings.skillPacks));
         SkillPack sel = ctx.settings.skillPacks.stream().filter(p -> p.id.equals(selectId)).findFirst()
@@ -132,9 +138,12 @@ public final class SkillsTab extends BorderPane {
         GridPane g = new GridPane();
         g.setHgap(14);
         g.setVgap(6);
+        // The global switch is only for imported packs; a bundled pack's skills are fixed per profile.
+        int first = pack.bundled ? 1 : 2;
         g.add(new Label("Skill"), 0, 0);
-        g.add(Ui.withTip(new Label("Enabled"), "Global switch: off turns the skill off for every profile."), 1, 0);
-        for (int c = 0; c < columns.size(); c++) g.add(new Label(columns.get(c).name), 2 + c, 0);
+        if (!pack.bundled)
+            g.add(Ui.withTip(new Label("Enabled"), "Global switch: off turns the skill off for every profile."), 1, 0);
+        for (int c = 0; c < columns.size(); c++) g.add(new Label(columns.get(c).name), first + c, 0);
         List<String> skills = ctx.skills.skillsOf(pack);
         for (int r = 0; r < skills.size(); r++) {
             String skill = skills.get(r);
@@ -148,7 +157,7 @@ public final class SkillsTab extends BorderPane {
                 changed();
                 show(pack);
             });
-            g.add(all, 1, r + 1);
+            if (!pack.bundled) g.add(all, 1, r + 1);
             for (int c = 0; c < columns.size(); c++) {
                 Profile p = columns.get(c);
                 boolean locked = pack.bundled && BundledPacks.lockedProfiles(pack.id).contains(p.name);
@@ -161,7 +170,7 @@ public final class SkillsTab extends BorderPane {
                     pack.disabledPerProfile.put(p.name, off);
                     changed();
                 });
-                g.add(cb, 2 + c, r + 1);
+                g.add(cb, first + c, r + 1);
             }
         }
         detail.getChildren().addAll(Ui.subheading("Skills"), g);

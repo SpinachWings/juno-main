@@ -22,13 +22,18 @@ public final class SettingsWindow {
         if (owner != null) stage.initOwner(owner);
         ProfilesTab profiles = new ProfilesTab(ctx);
         tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+        SkillsTab skills = new SkillsTab(ctx, profiles::refreshSkills);
         tabs.getTabs().addAll(
                 tab("Keys", new KeysTab(ctx)),
                 tab("System settings", new SystemTab(ctx)),
                 tab("Projects", new ProjectsTab(ctx)),
                 tab("Agent profiles", profiles),
-                tab("Skills", new SkillsTab(ctx, profiles::refreshSkills)),
+                tab("Skills", skills),
                 tab("Commands", new CommandsTab(ctx)));
+        tabs.getSelectionModel().selectedItemProperty().addListener((o, a, t) -> {
+            if (t != null && t.getContent() == skills) skills.refresh();
+            if (t != null && t.getContent() == profiles) profiles.refreshSkills();
+        });
         Scene scene = new Scene(tabs, 1020, 760);
         Theme.apply(scene);
         stage.setScene(scene);
