@@ -1,7 +1,13 @@
 # Juno v2 — build prompts
 
-One prompt per session. Start each milestone in a **fresh session**, opened in `juno-main` on the `v2` branch. Paste
-the shared preamble first, then the milestone's block.
+Start each milestone in a **fresh session** opened in `juno-main` on the `v2` branch, and send just:
+
+```
+Execute Milestone <N> from docs/build-prompts.md.
+```
+
+That session reads this file and follows the shared preamble plus that milestone's block. Everything stays on the
+`v2` branch: one commit per milestone.
 
 ## Before Milestone 0
 
@@ -10,10 +16,10 @@ the shared preamble first, then the milestone's block.
 - Still to do (you): create a sandbox GitHub repository and a sandbox GitLab project you don't mind agents commenting
   on, each with a simple pipeline (e.g. one job that runs `echo ok`). They're needed for Milestone 5a.
 
-## Shared preamble (paste at the top of every milestone prompt)
+## Shared preamble (applies to every milestone)
 
 ```
-We're building Juno v2 from the spec in docs/design.md, one milestone per session.
+We're building Juno v2 from the spec in docs/design.md, one milestone per session, all on the v2 branch.
 
 Read first: CLAUDE.md, docs/progress.md, and the docs/design.md sections listed below — only those, unless something
 there points elsewhere.
@@ -28,7 +34,8 @@ Rules for every milestone:
 - If the spec is wrong, ambiguous or impossible, stop and ask me before working around it. Record every decision you
   make that the spec didn't, in docs/progress.md.
 - At the end: update docs/progress.md (done / stubbed / decisions / known issues / what the next milestone needs to
-  know), then make one commit on a branch named milestone-<N>. Don't push.
+  know), then make one commit on the v2 branch ("Milestone <N>: <name>"). Don't push. Check that the previous
+  milestone is committed and docs/progress.md says it's done before starting; if not, stop and tell me.
 ```
 
 ## Milestone 0 — prompts (planning, no code) · Opus
