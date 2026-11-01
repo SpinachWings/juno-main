@@ -1,0 +1,135 @@
+/* ===== Palette: the only place colours are defined (design §2) ===== */
+.root {
+    -juno-bg: #0b0b0d;
+    -juno-panel: #131316;
+    -juno-raised: #1b1b20;
+    -juno-line: #2c2c34;
+    -juno-text: #d9d9e0;
+    -juno-dim: #8b8b96;
+    -juno-blue: #6FD6FF;
+    -juno-magenta: #FF4FD8;
+    -juno-good: #7CFFB2;
+    -juno-warn: #FFD166;
+    -juno-bad: #FF5C6C;
+
+    -fx-base: -juno-raised;
+    -fx-background: -juno-bg;
+    -fx-control-inner-background: -juno-panel;
+    -fx-accent: -juno-blue;
+    -fx-focus-color: -juno-blue;
+    -fx-faint-focus-color: transparent;
+    -fx-text-fill: -juno-text;
+    -fx-font-family: "Share Tech Mono", "Consolas", monospace;
+    -fx-font-size: 13px;
+    -fx-background-color: -juno-bg;
+}
+
+/* ===== Text ===== */
+.label { -fx-text-fill: -juno-text; }
+.dim { -fx-text-fill: -juno-dim; }
+.good { -fx-text-fill: -juno-good; }
+.warn { -fx-text-fill: -juno-warn; }
+.bad { -fx-text-fill: -juno-bad; }
+.heading { -fx-font-family: "VT323", "Consolas", monospace; -fx-font-size: 24px; -fx-text-fill: -juno-blue; }
+.subheading { -fx-font-family: "VT323", "Consolas", monospace; -fx-font-size: 19px; -fx-text-fill: -juno-magenta; }
+.logo { -fx-font-family: "VT323", "Consolas", monospace; -fx-font-size: 30px; -fx-text-fill: -juno-blue; }
+
+/* ===== Controls (square corners everywhere) ===== */
+.button {
+    -fx-background-color: -juno-raised;
+    -fx-border-color: -juno-line;
+    -fx-background-radius: 0;
+    -fx-border-radius: 0;
+    -fx-text-fill: -juno-text;
+    -fx-padding: 5 12 5 12;
+    -fx-cursor: hand;
+}
+.button:hover { -fx-border-color: -juno-blue; -fx-text-fill: -juno-blue; }
+.button:pressed { -fx-background-color: -juno-line; }
+.button:disabled { -fx-opacity: 0.4; }
+.button:default, .button.primary { -fx-border-color: -juno-blue; -fx-text-fill: -juno-blue; }
+.button.danger:hover { -fx-border-color: -juno-bad; -fx-text-fill: -juno-bad; }
+.toggle-button {
+    -fx-background-color: -juno-raised; -fx-border-color: -juno-line;
+    -fx-background-radius: 0; -fx-border-radius: 0; -fx-text-fill: -juno-dim; -fx-padding: 5 14 5 14;
+}
+.toggle-button:selected { -fx-border-color: -juno-blue; -fx-text-fill: -juno-blue; -fx-background-color: -juno-panel; }
+
+.text-field, .text-area, .password-field, .combo-box-base, .spinner {
+    -fx-background-color: -juno-panel;
+    -fx-border-color: -juno-line;
+    -fx-background-radius: 0;
+    -fx-border-radius: 0;
+    -fx-text-fill: -juno-text;
+    -fx-prompt-text-fill: -juno-dim;
+    -fx-highlight-fill: -juno-blue;
+    -fx-highlight-text-fill: #000000;
+}
+.text-field:focused, .text-area:focused, .password-field:focused, .combo-box-base:focused {
+    -fx-border-color: -juno-blue;
+}
+.text-field:readonly, .text-area:readonly { -fx-text-fill: -juno-text; }
+.text-area .content { -fx-background-color: -juno-panel; }
+.text-area.mono, .text-field.mono { -fx-font-size: 12px; }
+.combo-box .list-cell { -fx-text-fill: -juno-text; -fx-background-color: transparent; }
+.combo-box-popup .list-view { -fx-background-color: -juno-panel; -fx-border-color: -juno-line; }
+.combo-box-popup .list-cell:hover, .combo-box-popup .list-cell:selected { -fx-background-color: -juno-line; }
+.check-box .box { -fx-background-color: -juno-panel; -fx-border-color: -juno-line; -fx-background-radius: 0; -fx-border-radius: 0; }
+.check-box:selected .box { -fx-border-color: -juno-blue; }
+.check-box:selected .mark { -fx-background-color: -juno-blue; }
+.check-box:disabled { -fx-opacity: 0.6; }
+
+.scroll-pane, .scroll-pane > .viewport { -fx-background-color: transparent; -fx-background: transparent; }
+.scroll-bar { -fx-background-color: transparent; }
+.scroll-bar .thumb { -fx-background-color: -juno-line; -fx-background-radius: 0; }
+.scroll-bar .increment-button, .scroll-bar .decrement-button { -fx-padding: 0; }
+.scroll-bar .increment-arrow, .scroll-bar .decrement-arrow { -fx-shape: ""; -fx-padding: 0; }
+
+.list-view, .table-view, .tree-view { -fx-background-color: -juno-panel; -fx-border-color: -juno-line; -fx-background-radius: 0; }
+.list-cell, .table-row-cell, .tree-cell { -fx-background-color: transparent; -fx-text-fill: -juno-text; }
+.list-cell:filled:selected, .table-row-cell:selected, .tree-cell:selected { -fx-background-color: -juno-line; -fx-text-fill: -juno-blue; }
+.list-cell:filled:hover, .table-row-cell:hover { -fx-background-color: -juno-raised; }
+.table-view .column-header, .table-view .filler { -fx-background-color: -juno-raised; -fx-border-color: -juno-line; -fx-size: 28px; }
+.table-view .column-header .label { -fx-text-fill: -juno-blue; -fx-font-weight: normal; }
+.table-view .table-cell { -fx-text-fill: -juno-text; }
+
+.tab-pane > .tab-header-area > .tab-header-background { -fx-background-color: -juno-panel; }
+.tab-pane > .tab-header-area { -fx-padding: 0; }
+.tab {
+    -fx-background-color: -juno-panel; -fx-background-radius: 0;
+    -fx-border-color: -juno-line; -fx-border-width: 0 1 1 0;
+    -fx-padding: 4 10 4 10;
+}
+.tab .tab-label { -fx-text-fill: -juno-dim; -fx-font-size: 14px; }
+.tab:selected { -fx-background-color: -juno-bg; -fx-border-color: -juno-blue; -fx-border-width: 2 0 0 0; }
+.tab:selected .tab-label { -fx-text-fill: -juno-blue; }
+.tab-pane > .tab-content-area { -fx-background-color: -juno-bg; }
+
+.titled-pane > .title { -fx-background-color: -juno-raised; -fx-background-radius: 0; -fx-border-color: -juno-line; }
+.titled-pane > .title > .text { -fx-text-fill: -juno-text; }
+.titled-pane > .content { -fx-background-color: -juno-bg; -fx-border-color: -juno-line; }
+
+.tooltip { -fx-background-color: -juno-raised; -fx-text-fill: -juno-text; -fx-border-color: -juno-line; -fx-background-radius: 0; }
+.separator .line { -fx-border-color: -juno-line; }
+.dialog-pane { -fx-background-color: -juno-bg; }
+.dialog-pane > .button-bar > .container { -fx-background-color: -juno-bg; }
+.dialog-pane > .header-panel { -fx-background-color: -juno-panel; }
+.dialog-pane > .header-panel .label { -fx-text-fill: -juno-blue; }
+.context-menu, .menu-item { -fx-background-color: -juno-raised; -fx-background-radius: 0; }
+.menu-item .label { -fx-text-fill: -juno-text; }
+.menu-item:focused { -fx-background-color: -juno-line; }
+
+/* ===== Juno chrome ===== */
+.toolbar-bar { -fx-background-color: -juno-panel; -fx-border-color: -juno-line; -fx-border-width: 0 0 1 0; -fx-padding: 8 12 8 12; }
+.board-placeholder { -fx-background-color: -juno-bg; }
+.panel { -fx-background-color: -juno-panel; -fx-border-color: -juno-line; }
+.side-list { -fx-background-color: -juno-panel; -fx-border-color: -juno-line; }
+.status-chip { -fx-border-color: -juno-line; -fx-padding: 2 8 2 8; }
+.status-chip.good { -fx-border-color: -juno-good; }
+.status-chip.warn { -fx-border-color: -juno-warn; }
+.status-chip.bad { -fx-border-color: -juno-bad; }
+.lock { -fx-text-fill: -juno-magenta; }
+.meter { -fx-border-color: -juno-line; -fx-padding: 3 8 3 8; -fx-text-fill: -juno-dim; }
+.banner-bad { -fx-background-color: #2a1217; -fx-border-color: -juno-bad; -fx-padding: 8 10 8 10; }
+.banner-warn { -fx-background-color: #2a2412; -fx-border-color: -juno-warn; -fx-padding: 8 10 8 10; }
+.step-title { -fx-font-family: "VT323", "Consolas", monospace; -fx-font-size: 22px; -fx-text-fill: -juno-magenta; }
