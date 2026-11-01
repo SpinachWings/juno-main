@@ -46,8 +46,10 @@
 2. **Hook transport:** the hook is `~/.juno/hooks/juno-hook.sh`, registered for `Notification` and `Stop` (timeout 5 s)
    as `sh "<path>"`. It does nothing unless `JUNO_AGENT_ID` is set, otherwise appends Claude's hook JSON line to
    `~/.juno/hook-events/<agent>.jsonl` and exits 0, so it works with Juno closed. Milestone 2 tails those files.
-   `sh` is used on Windows too, since Claude Code there runs hooks through Git Bash; **Milestone 2 must confirm with the
-   real CLI that the hook fires on Windows.** Our entries are recognised by the script name; status is *outdated* when
+   `sh` is used on Windows too, since Claude Code there runs hooks through Git Bash; **Verified after the Milestone 1 commit
+   (Claude Code 2.1.314, Windows, haiku/low, scratch `CLAUDE_CONFIG_DIR` with only the login file copied in): the `Stop`
+   hook fires through `sh` and writes the event JSON; with no `JUNO_AGENT_ID` nothing is written.** `Notification` wasn't
+   exercised. Our entries are recognised by the script name; status is *outdated* when
    an event is missing, the command differs or the script text differs. Backups are
    `settings.json.juno-<timestamp>.bak` next to the settings file, only when a change is made. Claude's folder is
    `CLAUDE_CONFIG_DIR` if set, else `~/.claude`.
@@ -65,7 +67,7 @@
 8. **Settings in one file:** keys, projects, profiles, skill packs and system settings are all in `settings.json`.
 
 ### Known issues
-- Windows/Git Bash behaviour of the hook is untested against the real CLI (see decision 2).
+- The `Notification` hook event hasn't been exercised against the real CLI (`Stop` has; see decision 2).
 - The Commands table truncates long descriptions with an ellipsis (no row wrapping).
 - Bundled superpowers is copied from the upstream repository's `skills/` folder only; its hooks and other plugin parts
   are not used.
